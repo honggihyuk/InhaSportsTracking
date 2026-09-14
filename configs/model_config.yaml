@@ -6,18 +6,29 @@ project:
   version: "1.0.0"
   description: "축구 경기 3D 디지털 트윈 및 분석 플랫폼"
 
-# Detection settings
+# Detection settings - YOLO Model Configuration
 detection:
-  model_path: "data/models/yolo_soccer.pt"
-  confidence_threshold: 0.5
+  # Primary model: YOLO11s (COCO pretrained)
+  # Downloaded from Ultralytics official repository
+  # Location: models/yolo11s.pt (18.4MB)
+  model_path: "models/yolo11s.pt"
+  
+  # Alternative models available:
+  # - models/yolo11n.pt (5.4MB) - Faster, lower accuracy
+  # - models/yolo11m.pt - Slower, higher accuracy (needs download)
+  
+  confidence_threshold: 0.25
   iou_threshold: 0.45
-  device: "cuda"  # or "cpu"
-  classes:
-    - ball
-    - player
-    - goalkeeper
-    - referee
-    - assistant_referee
+  img_size: 640
+  device: "cpu"  # or "cuda" if GPU available
+  
+  # COCO classes relevant for soccer
+  # Class 0: person (players, referee, goalkeeper)
+  # Class 32: sports ball (soccer ball)
+  classes: [0, 32]
+  class_names:
+    0: "person"
+    32: "sports ball"
 
 # Tracking settings
 tracking:
