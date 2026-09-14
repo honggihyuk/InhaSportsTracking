@@ -150,7 +150,7 @@ class SoccerTracker:
                 min_dist = float('inf')
                 for det in detections:
                     dist = np.sqrt((det.center[0] - det_center[0])**2 + 
-                                 **(det.center[1] - det_center[1])2)
+                                 (det.center[1] - det_center[1])**2)
                     if dist < min_dist:
                         min_dist = dist
                         class_id = det.class_id

@@ -214,7 +214,7 @@ class HomographyTransformer:
             wx, wy = self.pixel_to_world(px, py)
             px_recon, py_recon = self.world_to_pixel(wx, wy)
             
-            error = np.sqrt((px - px_recon)**2 + **(py - py_recon)2)
+            error = np.sqrt((px - px_recon)**2 + (py - py_recon)**2)
             errors.append(error)
             
         return {
