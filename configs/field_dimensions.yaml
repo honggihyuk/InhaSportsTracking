@@ -1,0 +1,61 @@
+# 축구장 규격 설정 (FIFA 표준)
+
+field:
+  # 전체 크기 (미터)
+  length: 105.0
+  width: 68.0
+  
+  # 라인 두께 (미터)
+  line_thickness: 0.12
+  
+  # 페널티 에어리어
+  penalty_area:
+    length: 16.5
+    width: 40.3
+    
+  # 골 에어리어
+  goal_area:
+    length: 5.5
+    width: 18.3
+    
+  # 센터 서클
+  center_circle:
+    radius: 9.15
+    
+  # 코너 아크
+  corner_arc:
+    radius: 1.0
+    
+  # 골
+  goal:
+    width: 7.32
+    height: 2.44
+    depth: 2.0
+    
+# 마킹 포인트 (상대 좌표, -1 ~ 1)
+markings:
+  corners:
+    - name: "top_left"
+      x: -1.0
+      y: -1.0
+    - name: "top_right"
+      x: 1.0
+      y: -1.0
+    - name: "bottom_right"
+      x: 1.0
+      y: 1.0
+    - name: "bottom_left"
+      x: -1.0
+      y: 1.0
+      
+  center:
+    x: 0.0
+    y: 0.0
+    
+  penalty_spots:
+    - name: "left_penalty"
+      x: -0.52
+      y: 0.0
+    - name: "right_penalty"
+      x: 0.52
+      y: 0.0
