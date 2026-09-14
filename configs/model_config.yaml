@@ -1,0 +1,77 @@
+# Soccer 3D Digital Twin Configuration
+
+# Project settings
+project:
+  name: "Soccer 3D Digital Twin"
+  version: "1.0.0"
+  description: "축구 경기 3D 디지털 트윈 및 분석 플랫폼"
+
+# Detection settings
+detection:
+  model_path: "data/models/yolo_soccer.pt"
+  confidence_threshold: 0.5
+  iou_threshold: 0.45
+  device: "cuda"  # or "cpu"
+  classes:
+    - ball
+    - player
+    - goalkeeper
+    - referee
+    - assistant_referee
+
+# Tracking settings
+tracking:
+  type: "bytetrack"  # or "botsort"
+  track_threshold: 0.3
+  match_threshold: 0.8
+  max_age: 30  # frames
+  min_hits: 3
+
+# Camera calibration
+calibration:
+  field_length: 105.0  # meters (FIFA standard)
+  field_width: 68.0    # meters
+  camera_height: 15.0  # meters (estimated)
+  auto_calibrate: true
+
+# 3D Gaussian Splatting
+gaussian_splatting:
+  enabled: true
+  canonical_space:
+    num_gaussians: 10000
+    sh_degree: 3
+  deformation_mlp:
+    hidden_dim: 256
+    num_layers: 4
+    time_encoding: true
+  rendering:
+    resolution: [1920, 1080]
+    fps: 30
+
+# Data processing
+data:
+  input_format: "mp4"  # or "rtsp", "image_sequence"
+  output_format: "json"
+  save_trajectories: true
+  save_heatmaps: true
+
+# Database (optional)
+database:
+  enabled: false
+  type: "sqlite"  # or "postgresql"
+  path: "data/sports_analysis.db"
+
+# Visualization
+visualization:
+  show_detections: true
+  show_trajectories: true
+  show_field_overlay: true
+  top_down_view: true
+  web_interface: true
+  port: 8080
+
+# Logging
+logging:
+  level: "INFO"
+  save_to_file: true
+  log_dir: "logs"
