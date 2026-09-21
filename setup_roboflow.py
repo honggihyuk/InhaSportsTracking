@@ -76,15 +76,35 @@ for dataset_info in DATASETS:
         # 프로젝트 로드
         project = rf.workspace(dataset_info["workspace"]).project(dataset_info["name"])
         
-        # 버전 로드 및 다운로드
+        # 버전 로드
         version = project.version(dataset_info["version"])
-        download_path = version.download(
-            model_format="yolov11",  # 최신 YOLO11 형식
-            location=str(DOWNLOAD_DIR),
-            overwrite=False
-        )
         
-        print(f"   ✅ 다운로드 완료: {download_path}")
+        # 필드 탐지 (키포인트) 는 yolov11 을 지원하지 않으므로 자동 감지 및 변경
+        model_format = "yolov11"
+        if "field" in dataset_info["name"]:
+            print("   ℹ️  키포인트 프로젝트이므로 'yolov8' 포맷으로 다운로드합니다.")
+            model_format = "yolov8"
+        
+        # 다운로드 시도
+        try:
+            download_path = version.download(
+                model_format=model_format,
+                location=str(DOWNLOAD_DIR),
+                overwrite=False
+            )
+            print(f"   ✅ 다운로드 완료: {download_path}")
+        except Exception as download_error:
+            error_msg = str(download_error)
+            if "invalid format" in error_msg and model_format == "yolov11":
+                print(f"   🔄 '{model_format}' 포맷 오류 발생. 'yolov8'로 재시도합니다...")
+                download_path = version.download(
+                    model_format="yolov8",
+                    location=str(DOWNLOAD_DIR),
+                    overwrite=False
+                )
+                print(f"   ✅ 재시도 성공: {download_path}")
+            else:
+                raise
         
     except Exception as e:
         print(f"   ❌ 오류 발생: {str(e)}")
