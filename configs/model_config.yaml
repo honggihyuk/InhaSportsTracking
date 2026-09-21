@@ -18,9 +18,9 @@ detection:
   
   # Roboflow 모델 경로 (use_roboflow_models: true 일 때만 사용)
   roboflow_models:
-    players: "data/roboflow_datasets/football-players-detection/weights/best.pt"
-    ball: "data/roboflow_datasets/football-ball-detection/weights/best.pt"
-    field: "data/roboflow_datasets/football-field-detection/weights/best.pt"
+    players: "data/roboflow_datasets/football-players-detection-3zvbc/weights/best.pt"
+    ball: "data/roboflow_datasets/football-ball-detection-rejhg/weights/best.pt"
+    field: "data/roboflow_datasets/football-field-detection-f07vi/weights/best.pt"
   
   # Alternative models available:
   # - models/yolo11n.pt (5.4MB) - Faster, lower accuracy

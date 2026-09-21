@@ -47,7 +47,7 @@ class RoboflowSoccerDetector:
             self.players_model = self._load_model(players_model_path)
         else:
             # 기본 경로: 다운로드된 Roboflow 데이터셋
-            default_path = base_path / "football-players-detection" / "weights" / "best.pt"
+            default_path = base_path / "football-players-detection-3zvbc" / "weights" / "best.pt"
             if default_path.exists():
                 self.players_model = self._load_model(str(default_path))
             else:
@@ -58,7 +58,7 @@ class RoboflowSoccerDetector:
         if ball_model_path:
             self.ball_model = self._load_model(ball_model_path)
         else:
-            default_path = base_path / "football-ball-detection" / "weights" / "best.pt"
+            default_path = base_path / "football-ball-detection-rejhg" / "weights" / "best.pt"
             if default_path.exists():
                 self.ball_model = self._load_model(str(default_path))
             else:
@@ -70,7 +70,7 @@ class RoboflowSoccerDetector:
         if field_model_path:
             self.field_model = self._load_model(field_model_path)
         else:
-            default_path = base_path / "football-field-detection" / "weights" / "best.pt"
+            default_path = base_path / "football-field-detection-f07vi" / "weights" / "best.pt"
             if default_path.exists():
                 self.field_model = self._load_model(str(default_path))
         

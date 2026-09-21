@@ -380,7 +380,7 @@ if __name__ == '__main__':
         # 비디오 처리
         if args.video:
             print(f"\n🎬 비디오 처리 시작: {args.video}")
-            processed_data = pipeline.process_video(args.video)
+            processed_data = pipeline.process_video(args.video, max_frames=50)  # 테스트용 50 프레임만
             
             # 궤적 내보내기
             pipeline.export_trajectory(processed_data, 'trajectories.csv')
