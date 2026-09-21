@@ -88,16 +88,29 @@ class Soccer3DPipeline:
         """모든 컴포넌트 초기화"""
         print("\n=== 컴포넌트 초기화 ===")
         
-        # 1. 객체 탐지기 - Roboflow 전문 모델 사용
+        # 1. 객체 탐지기 - 설정에 따라 Roboflow 또는 기본 YOLO 사용
         det_config = self.config.get('detection', {})
-        self.detector = RoboflowSoccerDetector(
-            players_model_path='data/roboflow_datasets/football-players-detection/weights/best.pt',
-            ball_model_path='data/roboflow_datasets/football-ball-detection/weights/best.pt',
-            field_model_path='data/roboflow_datasets/football-field-detection/weights/best.pt',
-            confidence_threshold=det_config.get('confidence_threshold', 0.5),
-            device=self.device
-        )
-        print("✓ RoboflowSoccerDetector 초기화 완료")
+        use_roboflow = det_config.get('use_roboflow_models', False)
+        
+        if use_roboflow:
+            roboflow_models = det_config.get('roboflow_models', {})
+            self.detector = RoboflowSoccerDetector(
+                players_model_path=roboflow_models.get('players'),
+                ball_model_path=roboflow_models.get('ball'),
+                field_model_path=roboflow_models.get('field'),
+                confidence_threshold=det_config.get('confidence_threshold', 0.5),
+                device=self.device
+            )
+            print("✓ RoboflowSoccerDetector 초기화 완료 (전문 모델)")
+        else:
+            # 기본 YOLO11 모델 사용
+            model_path = det_config.get('model_path', 'models/yolo11s.pt')
+            self.detector = SoccerDetector(
+                players_model_path=model_path,
+                confidence_threshold=det_config.get('confidence_threshold', 0.5),
+                device=self.device
+            )
+            print("✓ SoccerDetector 초기화 완료 (기본 YOLO11)")
         
         # 2. 객체 추적기
         track_config = self.config.get('tracker', {})
@@ -346,23 +359,56 @@ class Soccer3DPipeline:
 
 
 if __name__ == '__main__':
-    # 파이프라인 테스트
-    pipeline = Soccer3DPipeline()
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Soccer 3D Digital Twin Pipeline')
+    parser.add_argument('--config', type=str, default='configs/model_config.yaml',
+                        help='설정 파일 경로')
+    parser.add_argument('--video', type=str, default=None,
+                        help='처리할 비디오 파일 경로')
+    args = parser.parse_args()
+    
+    # 파이프라인 초기화
+    print("=== Soccer 3D Digital Twin Pipeline ===\n")
+    pipeline = Soccer3DPipeline(config_path=args.config)
     
     # 컴포넌트 초기화 (실제 사용시에는 모델 파일 필요)
     try:
         pipeline.initialize_components()
-        print("\n파이프라인 초기화 성공!")
-    except Exception as e:
-        print(f"\n초기화 중 오류 발생: {e}")
-        print("실제 사용시에는 YOLO 모델 파일과 캘리브레이션 데이터가 필요합니다.")
+        print("\n✅ 파이프라인 초기화 성공!")
         
-    # 더미 데이터로 테스트
-    print("\n=== 더미 데이터 테스트 ===")
-    dummy_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
-    
-    # 호모그래피 설정 (더미)
-    pixel_corners = [(100, 100), (1180, 100), (1180, 620), (100, 620)]
-    pipeline.homography.compute_from_field_lines(pixel_corners)
-    
-    print("테스트 완료!")
+        # 비디오 처리
+        if args.video:
+            print(f"\n🎬 비디오 처리 시작: {args.video}")
+            processed_data = pipeline.process_video(args.video)
+            
+            # 궤적 내보내기
+            pipeline.export_trajectory(processed_data, 'trajectories.csv')
+            print("\n✅ 처리 완료!")
+        else:
+            # 더미 데이터로 테스트
+            print("\n=== 더미 데이터 테스트 ===")
+            dummy_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+            
+            # 호모그래피 설정 (더미)
+            pixel_corners = [(100, 100), (1180, 100), (1180, 620), (100, 620)]
+            pipeline.homography.compute_from_field_lines(pixel_corners)
+            
+            # 프레임 처리 테스트
+            frame_data = pipeline.process_frame(dummy_frame)
+            print(f"프레임 {frame_data.frame_number} 처리 완료")
+            print(f"탐지된 객체: {len(frame_data.detections)}개")
+            print(f"추적된 객체: {len(frame_data.tracked_objects)}개")
+            
+            print("\n✅ 테스트 완료!")
+            
+    except Exception as e:
+        print(f"\n⚠️ 초기화 중 오류 발생: {e}")
+        print("\n💡 실제 사용시에는 다음이 필요합니다:")
+        print("   1. Roboflow API 키 설정 (.env 파일)")
+        print("   2. python setup_roboflow.py 실행하여 데이터셋 다운로드")
+        print("   3. 또는 configs/model_config.yaml 에서 모델 경로 수정")
+        print("\n📝 빠른 시작 가이드:")
+        print("   1. .env 파일에 ROBOFLOW_API_KEY 설정")
+        print("   2. python setup_roboflow.py 실행")
+        print("   3. python -m pipeline.main_pipeline --config configs/model_config.yaml --video <영상경로>")

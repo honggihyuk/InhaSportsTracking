@@ -56,9 +56,9 @@ DATASETS = [
     }
 ]
 
-# 다운로드 디렉토리 생성
-DOWNLOAD_DIR = Path("datasets")
-DOWNLOAD_DIR.mkdir(exist_ok=True)
+# 다운로드 디렉토리 생성 (프로젝트 구조에 맞춤)
+DOWNLOAD_DIR = Path("data/roboflow_datasets")
+DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 print(f"\n📂 데이터셋 다운로드 위치: {DOWNLOAD_DIR.absolute()}")
 print("=" * 60)
@@ -95,4 +95,4 @@ print("🎉 모든 데이터셋 다운로드가 완료되었습니다!")
 print(f"\n📁 다운로드된 데이터셋은 '{DOWNLOAD_DIR}' 폴더에서 확인하실 수 있습니다.")
 print("\n💡 다음 단계:")
 print("1. configs/model_config.yaml 에서 모델 경로 확인")
-print("2. python pipeline/main_pipeline.py --video <영상경로> 실행")
+print("2. python -m pipeline.main_pipeline --config configs/model_config.yaml 실행")

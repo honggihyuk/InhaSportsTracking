@@ -105,13 +105,42 @@
 
 ## 설치 및 실행
 
-### Python 백엔드
+### 1. Python 백엔드 설치
+
 ```bash
+# 의존성 설치
 pip install -r requirements.txt
-python pipeline/processor.py --config configs/model_config.yaml
+
+# Roboflow 패키지 설치 (선택사항 - 전문 모델 사용시)
+pip install roboflow python-dotenv
 ```
 
-### Web 프론트엔드
+### 2. Roboflow API 키 설정 (선택사항)
+
+Roboflow 의 축구 전문 데이터셋 (Players, Ball, Field) 을 사용하려면 API 키가 필요합니다.
+
+1. [Roboflow API 키 발급](https://app.roboflow.com/settings/api) 받기
+2. `.env` 파일 편집:
+   ```bash
+   ROBOFLOW_API_KEY=your_actual_api_key_here
+   ```
+3. 데이터셋 다운로드:
+   ```bash
+   python setup_roboflow.py
+   ```
+
+### 3. 파이프라인 실행
+
+```bash
+# 기본 테스트 (더미 데이터)
+python -m pipeline.main_pipeline --config configs/model_config.yaml
+
+# 실제 영상 처리
+python -m pipeline.main_pipeline --config configs/model_config.yaml --video <영상경로>
+```
+
+### 4. Web 프론트엔드 (개발 중)
+
 ```bash
 cd visualizer
 npm install
