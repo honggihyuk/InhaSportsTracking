@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 import yaml
 
-from tracking.detector import SoccerDetector, Detection
+from tracking.detector import RoboflowSoccerDetector, SoccerDetector
 from tracking.tracker import SoccerTracker, TrackedObject
 from tracking.homography import HomographyTransformer
 from tracking.coordinate_mapper import CoordinateMapper
@@ -24,7 +24,7 @@ class FrameData:
     """프레임별 데이터"""
     frame_number: int
     timestamp: float
-    detections: List[Detection]
+    detections: List[Dict]  # Dict 형식 탐지 결과 사용
     tracked_objects: List[TrackedObject]
     world_coordinates: List[Dict]
     
@@ -63,7 +63,7 @@ class Soccer3DPipeline:
     def _load_config(self, config_path: str) -> Dict:
         """설정 파일 로드"""
         if Path(config_path).exists():
-            with open(config_path, 'r') as f:
+            with open(config_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
             print(f"설정 파일 로드 완료: {config_path}")
         else:
@@ -88,14 +88,16 @@ class Soccer3DPipeline:
         """모든 컴포넌트 초기화"""
         print("\n=== 컴포넌트 초기화 ===")
         
-        # 1. 객체 탐지기
-        det_config = self.config.get('detector', {})
-        self.detector = SoccerDetector(
-            model_path=det_config.get('model_path', 'models/yolo_soccer.pt'),
+        # 1. 객체 탐지기 - Roboflow 전문 모델 사용
+        det_config = self.config.get('detection', {})
+        self.detector = RoboflowSoccerDetector(
+            players_model_path='data/roboflow_datasets/football-players-detection/weights/best.pt',
+            ball_model_path='data/roboflow_datasets/football-ball-detection/weights/best.pt',
+            field_model_path='data/roboflow_datasets/football-field-detection/weights/best.pt',
             confidence_threshold=det_config.get('confidence_threshold', 0.5),
             device=self.device
         )
-        print("✓ SoccerDetector 초기화 완료")
+        print("✓ RoboflowSoccerDetector 초기화 완료")
         
         # 2. 객체 추적기
         track_config = self.config.get('tracker', {})
