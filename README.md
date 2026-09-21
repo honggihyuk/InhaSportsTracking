@@ -1,151 +1,238 @@
-# Soccer 3D Digital Twin - Sports Analysis & Visualization Platform
+# ⚽ Soccer 3D Digital Twin
 
-## 프로젝트 개요
-축구 영상 (2D) + 움직임 트랙킹 (Tracking/Homography) + 3D Gaussian Splatting (3DGS) & MLP 변형 기술을 통합하여 스포츠 분석 시각화 솔루션을 구축합니다.
+**축구 영상 기반 3D 디지털 트윈 분석 플랫폼**
 
-## 핵심 아키텍처
+2D 축구 영상을 실시간으로 3D 디지털 트윈으로 변환하고, 선수 및 공의 움직임을 추적하여 자유로운 시점에서 경기를 분석할 수 있는 솔루션입니다.
 
-### 기존 기술 Base
-- **Roboflow Sports**: YOLO/ByteTrack/BoT-SORT 등으로 선수 및 공을 탐지/추적하고, 호모그래피 (Homography) 변환을 통해 2D 경기장 (Top-down view) 으로 위치를 매핑
-- **GeoTrafficView-3D**: 2D CCTV 픽셀 좌표를 캘리브레이션/변환식을 통해 3D 지도 좌표계로 옮기고, 차선 및 객체 포즈를 바인딩하여 디지털 트윈 환경에 렌더링
+---
 
-### 확장 구상 (3D Gaussian Splatting + Dynamic MLP)
-- 표준 공간 (Canonical Space) 의 3D 가우시안 (Gaussian) 을 정의
-- 시간/트랙킹 데이터 (위치, 뼈대 키포인트 포즈 등) 를 입력받는 MLP(Deformation Network) 를 통해 표준 가우시안의 위치 (μ), 크기 (S), 회전 (R), 불투명도 (o) 를 변형 (Deform)
-- 3D 공간 상에 자유로운 시점으로 축구 경기를 재현 (Volumetric Video/Free-viewpoint Rendering)
+## 🎯 프로젝트 개요
 
-## 개발 파이프라인
+### 핵심 기술 스택
 
-### 1 단계: 데이터 수집 및 멀티뷰/트랙킹 파이프라인 구축
-1. **영상 수집 & 카메라 캘리브레이션**
-   - 경기장 다중 시점 (Multi-view) 카메라 영상 또는 방송용 카메라 영상 확보
-   - 경기장 규격 라인 (Point-line correspondences) 기반 호모그래피 및 카메라 Extrinsics/Intrinsics 매매개변수 추정
+- **Object Detection**: YOLO11 + Roboflow 전문 모델
+- **Tracking**: ByteTrack/BoT-SORT (또는 Simple Tracker)
+- **Coordinate Mapping**: Homography + Camera Calibration
+- **3D Rendering**: Three.js (Web), 3D Gaussian Splatting (예정)
+- **Deformation Network**: MLP 기반 Dynamic Gaussian 변형
+- **Frontend**: React + Vite + Three.js
 
-2. **선수 및 공 2D/3D 트랙킹**
-   - Roboflow Sports 파이프라인 적용: YOLOv8/v10 + ByteTrack 으로 선수 ID 유지
-   - 2D Bounding Box 기반으로 3D World Coordinate(경기장 중심 원점 좌표계) 위치 좌표 추정
-   - (고도화 시) RTMPose / OpenPose 등을 도입하여 선수의 3D Skeleton Keypoints(2D/3D 관절 위치) 추출
+### 주요 기능
 
-### 2 단계: 표준 공간 (Canonical Space) 가우시안 및 Deformation MLP 설계
-1. **Canonical 3D Gaussian 정의**
-   - 표준 자세 (예: T-pose 등) 를 가진 선수 및 경기장의 기준 3DGS 모델 구축
+1. **실시간 객체 탐지 및 추적**: 선수, 공, 심판 자동 식별
+2. **2D → 3D 좌표 변환**: 호모그래피를 통한 경기장 월드 좌표 매핑
+3. **3D 디지털 트윈**: 가상 공간에서 경기 재현
+4. **Free-Viewpoint Rendering**:任意 시점에서의 경기 관람
+5. **실시간 통계 시각화**: 선수 위치, 속도, 이동 거리 등
 
-2. **Deformation Network (MLP) 구현**
-   - 입력: 표준 가우시안 위치 x, 시간 t, 또는 프레임별 선수의 3D Pose/Translation Vector
-   - 출력: 변형된 위치 Offset Δx, 회전 변형 Δr, 크기 변형 Δs
-   - Deformable 3DGS (예: Deformable-GS, Dynamic3DGS 기술 참조) 구조 탑재
+---
 
-### 3 단계: 3D 공간 렌더링 & 시점 자유화 (Free-Viewpoint Engine)
-1. **Real-time Gaussian Rasterization**
-   - CUDA 기반 3DGS 실시간 렌더러 (Diff-Gaussian-Rasterization) 연동
-
-2. **인터랙티브 시점제어 (Web/Desktop App UI)**
-   - GeoTrafficView-3D 에서 구축하셨던 웹 기반 3D 렌더링 엔진 (deck.gl, Three.js, WebGL 등) 노하우를 활용
-   - 자유로운 시점 전환 (전술 시점, 특정 선수 시점, 심판 시점 등) 기능 구현
-
-### 4 단계: 정보 시각화 및 데이터 적재 (Sports Digital Twin UI)
-1. **시각 정보 레이어 결합**
-   - 선수별 이동 속도, 뛴 거리, 패스 줄기, 히트맵, 오프사이드 라인 등의 통계/분석 데이터를 3D 공간 상에 오버레이 레이어로 바인딩
-
-2. **공간 DB 적재 및 질의 (LLM 연동)**
-   - GeoTrafficView-3D 의 구조처럼 프레임/시간대별 데이터 (위치, 속도, 이벤트) 를 PostGIS/SQLite 공간 DB 에 적재
-   - LLM 기반 데이터 질의 기능 구현 (예: "2 반 프레임에서 손흥민의 이동 거리는?", "가장 패스 성공률이 높은 영역은?")
-
-## 기술적 가능성 및 타당성
-
-| 평가 항목 | 가능성 | 상세 분석 및 해결 방안 |
-| --- | --- | --- |
-| **선수 트랙킹 및 좌표 매핑** | **매우 높음 (High)** | Roboflow Sports 및 GeoTrafficView-3D 프로젝트를 통해 호모그래피, 좌표 변환, ID 추적 노하우가 이미 입증됨 |
-| **3DGS 기반 Dynamic 표현** | **보통~높음 (Medium-High)** | 최근 Deformable-GS, 4D Gaussian Splatting 연구가 활발하여 PyTorch/CUDA 오픈소스를 직관적으로 이식 가능. 단일 방송 카메라 화면만 사용할 경우 가려짐 (Occlusion) 영역에 대한 가우시안 복원이 한계가 있으므로, **Multi-view 영상** 확보 또는 **Template-guided 3D Mesh (예: SMPL) 연동 가우시안**을 활용하는 것이 시각적 품질을 높이는 열쇠 |
-| **실시간성 (Real-time Rendering)** | **높음 (High)** | 3DGS 는 기존 NeRF 대비 렌더링 속도가 매우 빠르며 (100+ FPS 가능), MLP 가우시안 변형 역시 경량화된 MLP 를 쓰면 웹/엔드포인트 디바이스에서 수월하게 구동 가능 |
-| **사용자 경험 (UX) 확장성** | **매우 높음 (High)** | 단순 2D 중계 영상을 넘어, 오프사이드 3D 판정 시점, 전술 감독 시점 (Bird's-eye view), 특정 선수 1 인칭 시점 등 압도적인 몰입감과 정보 전달력을 제공할 수 있음 |
-
-## 핵심 제언
-
-1. **SMPL (Human Body Model) + 3DGS 결합 고려**
-   - 단순 MLP 로 t(시간) 에 따른 변형만 학습하면 동작이 복잡한 축구 동작에서 형상이 뭉개질 수 있음
-   - 2D 영상에서 **SMPL 인체 3D 파라미터**를 먼저 뽑고, SMPL 메쉬 표면에 가우시안을 바인딩한 뒤 MLP 로 세부 변형을 주는 **Human-centric 3DGS (예: GauHuman, Animatable Gaussians)** 방식을 추천
-
-2. **GeoTrafficView-3D 의 모듈 재활용**
-   - 기존 프로젝트의 **[CCTV/영상 수집 → 객체 탐지 → 3D 공간 변환 → 공간 DB 적재 → LLM 질의]** 파이프라인 구조는 축구 경기 데이터 분석 플랫폼으로 100% 1:1 대응 가능
-
-## 프로젝트 구조
+## 📁 프로젝트 구조
 
 ```
-/workspace
-├── data/                    # 데이터 저장소
-│   ├── raw/                 # 원본 영상 데이터
-│   ├── processed/           # 처리된 데이터 (트랙킹 결과, 호모그래피 행렬 등)
-│   └── models/              # 사전 학습된 모델 (YOLO, SMPL 등)
-├── tracking/                # 트랙킹 파이프라인
-│   ├── detector.py          # 객체 탐지 (YOLO)
-│   ├── tracker.py           # 객체 추적 (ByteTrack/BoT-SORT)
-│   ├── homography.py        # 호모그래피 변환
-│   └── coordinate_mapper.py # 2D→3D 좌표 매핑
-├── gs_model/                # 3D Gaussian Splatting 모델
-│   ├── canonical_gs.py      # 표준 3D 가우시안 정의
-│   ├── deformation_mlp.py   # 변형 MLP 네트워크
-│   └── renderer.py          # 3DGS 렌더러
-├── pipeline/                # 전체 파이프라인 통합
-│   ├── data_loader.py       # 데이터 로딩 및 전처리
-│   ├── processor.py         # 메인 처리 파이프라인
-│   └── exporter.py          # 결과 내보내기
-├── visualizer/              # 시각화 인터페이스
-│   ├── src/                 # 프론트엔드 소스 (Three.js/deck.gl)
-│   └── public/              # 정적 자산
-├── configs/                 # 설정 파일
-│   ├── camera_calibration.yaml
-│   ├── field_dimensions.yaml
-│   └── model_config.yaml
-├── tests/                   # 테스트 코드
-├── requirements.txt         # Python 의존성
-├── package.json             # Node.js 의존성 (프론트엔드)
-└── README.md                # 프로젝트 문서
+InhaSportsTracking/
+├── tracking/               # 객체 탐지 및 추적 모듈
+│   ├── detector.py         # YOLO 기반 객체 탐지
+│   ├── tracker.py          # 객체 추적 (ByteTrack/Simple)
+│   ├── homography.py       # 호모그래피 변환
+│   └── coordinate_mapper.py # 2D → 3D 좌표 매핑
+├── gs_model/               # 3D Gaussian Splatting 모델
+│   ├── canonical_gs.py     # 표준 공간 가우시안 정의
+│   └── deformation_mlp.py  # 변형 MLP 네트워크
+├── pipeline/               # 통합 처리 파이프라인
+│   └── main_pipeline.py    # 메인 파이프라인 실행기
+├── frontend/               # Web 프론트엔드 (React)
+│   ├── src/
+│   │   ├── App.jsx         # 메인 애플리케이션
+│   │   └── main.jsx        # 엔트리 포인트
+│   └── package.json
+├── configs/                # 설정 파일
+│   ├── model_config.yaml   # 모델 및 파이프라인 설정
+│   └── field_dimensions.yaml # 축구장 규격
+├── data/                   # 데이터 저장소
+│   ├── raw/                # 원본 비디오
+│   └── roboflow_datasets/  # Roboflow 다운로드 데이터
+├── models/                 # 사전 학습 모델
+│   ├── yolo11s.pt          # YOLO11s 모델
+│   └── yolo11n.pt          # YOLO11n 경량 모델
+├── .env                    # 환경 변수 (API 키 등)
+├── requirements.txt        # Python 의존성
+└── README.md               # 이 파일
 ```
 
-## 설치 및 실행
+---
 
-### 1. Python 백엔드 설치
+## 🚀 빠른 시작
+
+### 1. Python 백엔드 설정
 
 ```bash
 # 의존성 설치
 pip install -r requirements.txt
 
-# Roboflow 패키지 설치 (선택사항 - 전문 모델 사용시)
-pip install roboflow python-dotenv
-```
+# Roboflow API 키 설정 (.env 파일 수정)
+echo "ROBOFLOW_API_KEY=your_api_key" > .env
 
-### 2. Roboflow API 키 설정 (선택사항)
+# (선택사항) Roboflow 전문 모델 다운로드
+python setup_roboflow.py
 
-Roboflow 의 축구 전문 데이터셋 (Players, Ball, Field) 을 사용하려면 API 키가 필요합니다.
-
-1. [Roboflow API 키 발급](https://app.roboflow.com/settings/api) 받기
-2. `.env` 파일 편집:
-   ```bash
-   ROBOFLOW_API_KEY=your_actual_api_key_here
-   ```
-3. 데이터셋 다운로드:
-   ```bash
-   python setup_roboflow.py
-   ```
-
-### 3. 파이프라인 실행
-
-```bash
-# 기본 테스트 (더미 데이터)
+# 파이프라인 실행
 python -m pipeline.main_pipeline --config configs/model_config.yaml
-
-# 실제 영상 처리
-python -m pipeline.main_pipeline --config configs/model_config.yaml --video <영상경로>
 ```
 
-### 4. Web 프론트엔드 (개발 중)
+### 2. Web 프론트엔드 설정
 
 ```bash
-cd visualizer
+cd frontend
+
+# 의존성 설치
 npm install
+
+# 개발 서버 시작
 npm run dev
 ```
 
-## 라이선스
+브라우저에서 `http://localhost:5173` 접속
+
+---
+
+## 📊 사용된 데이터셋
+
+### Roboflow 전문 모델
+
+1. **[Football Players Detection](https://universe.roboflow.com/roboflow-jvuqo/football-players-detection-3zvbc)**
+   - 선수, 심판, 골키퍼 탐지
+   - 22,000+ 라벨링 이미지
+
+2. **[Football Ball Detection](https://universe.roboflow.com/roboflow-jvuqo/football-ball-detection-rejhg)**
+   - 축구공 탐지
+   - 다양한 각도 및 조명 조건
+
+3. **[Football Field Detection](https://universe.roboflow.com/roboflow-jvuqo/football-field-detection-f07vi)**
+   - 경기장 라인 및 영역 탐지
+   - 호모그래피 캘리브레이션용
+
+### 기본 모델 (COCO)
+
+- **YOLO11s**: 80 클래스 일반 객체 탐지
+- person (Class 0), sports ball (Class 32) 사용
+
+---
+
+## 🔧 설정 가이드
+
+### `.env` 파일
+
+```bash
+# Roboflow API 키 (필수)
+ROBOFLOW_API_KEY=your_roboflow_api_key_here
+```
+
+API 키 발급: https://app.roboflow.com/settings/api
+
+### `configs/model_config.yaml`
+
+```yaml
+device: cpu  # cpu 또는 cuda
+use_roboflow_models: false  # true 로 변경시 Roboflow 전문 모델 사용
+
+detector:
+  model_path: models/yolo11s.pt
+  confidence: 0.25
+  classes: [0, 32]  # person, ball
+
+tracker:
+  type: simple  # simple 또는 boxmot
+  track_threshold: 0.5
+```
+
+---
+
+## 📈 아키텍처 다이어그램
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│  Video Input    │────▶│  Object Detection │────▶│   Object Track  │
+│  (MP4, AVI)     │     │  (YOLO11)         │     │  (ByteTrack)    │
+└─────────────────┘     └──────────────────┘     └──────────────────┘
+                                                        │
+                                                        ▼
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│  3D Rendering   │◀────│  Gaussian Space  │◀────│  3D Coordinate  │
+│  (Three.js)     │     │  + Deformation   │     │    Mapping      │
+└─────────────────┘     └──────────────────┘     └──────────────────┘
+        │
+        ▼
+┌─────────────────┐
+│  Web Frontend   │
+│  (React + UI)   │
+└─────────────────┘
+```
+
+---
+
+## 🎨 Web 프론트엔드 기능
+
+### 뷰 모드
+
+1. **3D 뷰**: 입체적인 경기장 렌더링 (Three.js)
+2. **탑다운 뷰**: 전술 분석용 평면 뷰
+3. **선수 시점**: 특정 선수 1 인칭 시점
+
+### 컨트롤 패널
+
+- 비디오 업로드 및 재생 제어
+- 타임라인 시크 바
+- 실시간 통계 (선수 수, 공 위치, 속도)
+- 선수 목록 및 팀별 분류
+
+### 향후 추가 예정
+
+- WebSocket 실시간 데이터 연동
+- SMPL 인체 모델 기반 포즈 복원
+- 3D Gaussian Splatting 고품질 렌더링
+- 전술 분석 도구 (패스 라인, 히트맵)
+
+---
+
+## 📝 문서
+
+- **[TESTING_GUIDE.md](./TESTING_GUIDE.md)**: 테스트 및 사용 가이드
+- **[WEB_FRONTEND_GUIDE.md](./frontend/WEB_FRONTEND_GUIDE.md)**: 웹 프론트엔드 상세 가이드
+- **[MODEL_SETUP_GUIDE.md](./MODEL_SETUP_GUIDE.md)**: 모델 설정 및 커스터마이징
+
+---
+
+## 🚧 개발 현황
+
+- ✅ YOLO11 모델 통합
+- ✅ Roboflow 데이터셋 연동
+- ✅ 객체 탐지 및 추적 모듈
+- ✅ 호모그래피 좌표 변환
+- ✅ Canonical 3D Gaussian Space
+- ✅ Deformation MLP 구현
+- ✅ Web 프론트엔드 (React + Three.js)
+- ⏳ 실시간 WebSocket 연동
+- ⏳ 3D Gaussian Splatting 렌더러
+- ⏳ SMPL 포즈 추정 연동
+
+---
+
+## 📚 참고 자료
+
+- [Roboflow Sports](https://github.com/roboflow/sports)
+- [Ultralytics YOLO11](https://docs.ultralytics.com/models/yolo11/)
+- [Three.js 문서](https://threejs.org/docs/)
+- [Deformable 3DGS](https://arxiv.org/abs/2312.00106)
+
+---
+
+## 👥 기여
+
+이슈 및 PR 환영합니다!
+
+---
+
+## 📄 라이선스
+
 MIT License
