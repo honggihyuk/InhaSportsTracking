@@ -29,7 +29,7 @@ detection:
   confidence_threshold: 0.25
   iou_threshold: 0.45
   img_size: 640
-  device: "cpu"  # or "cuda" if GPU available
+  device: "cpu"  # GPU 가 없을 경우 "cpu" 사용 (CUDA 없음 오류 방지)
   
   # COCO classes relevant for soccer
   # Class 0: person (players, referee, goalkeeper)

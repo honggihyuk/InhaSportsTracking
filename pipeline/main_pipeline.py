@@ -58,7 +58,9 @@ class Soccer3DPipeline:
         
         # 상태 변수
         self.frame_count = 0
-        self.device = self.config.get('device', 'cuda')
+        # 설정 파일의 detection.device 를 참조하거나, 명시적 device 설정 사용
+        det_config = self.config.get('detection', {})
+        self.device = det_config.get('device', 'cpu')  # GPU 가 없을 경우 cpu 로 기본값 변경
         
     def _load_config(self, config_path: str) -> Dict:
         """설정 파일 로드"""
