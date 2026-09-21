@@ -30,6 +30,99 @@ class TrackedObject:
             self.trajectory = [self.center]
 
 
+class SimpleTracker:
+    """
+    간단한 추적기 (boxmot 설치되지 않았을 때 사용)
+    IoU 기반 매칭으로 간단한 ID 유지
+    """
+    
+    def __init__(self, match_threshold: float = 0.3, max_age: int = 30):
+        self.match_threshold = match_threshold
+        self.max_age = max_age
+        self.trackers = {}  # track_id -> {bbox, age, class_id, label}
+        self.next_id = 0
+        
+    def update(self, det_array: np.ndarray, frame: Optional[np.ndarray] = None) -> np.ndarray:
+        """
+        간단한 IoU 기반 추적 업데이트
+        
+        Args:
+            det_array: [[x1, y1, x2, y2, conf, class_id], ...]
+            
+        Returns:
+            [[x1, y1, x2, y2, track_id, conf], ...]
+        """
+        if len(det_array) == 0:
+            # 탐지된 객체 없으면 모든 tracker 나이 증가
+            for tid in list(self.trackers.keys()):
+                self.trackers[tid]['age'] += 1
+            return np.empty((0, 6))
+        
+        # 현재 탐지들과 기존 tracker 매칭
+        tracks = []
+        used_dets = set()
+        
+        for tid, tracker in self.trackers.items():
+            best_iou = 0
+            best_det_idx = -1
+            
+            for i, det in enumerate(det_array):
+                if i in used_dets:
+                    continue
+                    
+                iou = self._iou(tracker['bbox'], det[:4])
+                if iou > best_iou and iou > self.match_threshold:
+                    best_iou = iou
+                    best_det_idx = i
+            
+            if best_det_idx >= 0:
+                det = det_array[best_det_idx]
+                tracker['bbox'] = det[:4]
+                tracker['age'] = 0
+                tracker['conf'] = det[4]
+                
+                tracks.append([det[0], det[1], det[2], det[3], tid, det[4]])
+                used_dets.add(best_det_idx)
+            else:
+                tracker['age'] += 1
+        
+        # 새로운 탐지 추가
+        for i, det in enumerate(det_array):
+            if i not in used_dets:
+                new_id = self.next_id
+                self.next_id += 1
+                
+                self.trackers[new_id] = {
+                    'bbox': det[:4],
+                    'age': 0,
+                    'class_id': det[5],
+                    'conf': det[4]
+                }
+                
+                tracks.append([det[0], det[1], det[2], det[3], new_id, det[4]])
+        
+        # 오래된 tracker 제거
+        for tid in list(self.trackers.keys()):
+            if self.trackers[tid]['age'] > self.max_age:
+                del self.trackers[tid]
+        
+        return np.array(tracks) if tracks else np.empty((0, 6))
+    
+    def _iou(self, box1: Tuple, box2: np.ndarray) -> float:
+        """IoU 계산"""
+        x1 = max(box1[0], box2[0])
+        y1 = max(box1[1], box2[1])
+        x2 = min(box1[2], box2[2])
+        y2 = min(box1[3], box2[3])
+        
+        inter_area = max(0, x2 - x1) * max(0, y2 - y1)
+        box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        
+        union_area = box1_area + box2_area - inter_area
+        return inter_area / union_area if union_area > 0 else 0
+
+
 class SoccerTracker:
     """
     축구 경기장 객체 추적기
@@ -75,7 +168,9 @@ class SoccerTracker:
         """
         try:
             if self.tracker_type == 'bytetrack':
+                # boxmot v10.x 호환 import
                 from boxmot import BYTETracker
+                
                 self.tracker = BYTETracker(
                     track_thresh=self.track_threshold,
                     match_thresh=self.match_threshold,
@@ -84,6 +179,7 @@ class SoccerTracker:
                 )
             elif self.tracker_type == 'botsort':
                 from boxmot import BoTSORT
+                
                 self.tracker = BoTSORT(
                     track_thresh=self.track_threshold,
                     match_thresh=self.match_threshold,
@@ -96,9 +192,17 @@ class SoccerTracker:
             print(f"추적기 초기화 완료: {self.tracker_type}")
             
         except ImportError as e:
-            print("boxmot 패키지가 설치되어 있지 않습니다.")
-            print("pip install boxmot 로 설치해주세요.")
-            raise
+            print("boxmot 패키지가 설치되어 있지 않거나 호환되지 않는 버전입니다.")
+            print(f"오류 상세: {e}")
+            print("pip install boxmot==10.0.84 를 실행하여 호환 버전을 설치해주세요.")
+            print("\n대안: 간단한tracker 사용 (track_threshold 이하 신뢰도 필터링)")
+            # Fallback: 간단한 tracker 사용
+            self._init_simple_tracker()
+            
+    def _init_simple_tracker(self):
+        """간단한 tracker 초기화 (boxmot 없을 시 사용)"""
+        print("간단한 tracker 모드로 전환됩니다.")
+        self.tracker = SimpleTracker(match_threshold=self.match_threshold, max_age=self.max_age)
             
     def update(self, detections: List, frame: Optional[np.ndarray] = None) -> List[TrackedObject]:
         """
