@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 
-const API_BASE_URL = 'http://localhost:8000';
+export const API_BASE_URL = 'http://localhost:8000';
 
 export function useTrackingData(initialFrame = 0) {
   const [trackingData, setTrackingData] = useState(null);
@@ -31,7 +31,7 @@ export function useTrackingData(initialFrame = 0) {
   return { trackingData, loading, error, refetch: fetchTrackingData };
 }
 
-export function useWebSocket(frameRate = 30) {
+export function useWebSocket() {
   const [ws, setWs] = useState(null);
   const [connected, setConnected] = useState(false);
   const [data, setData] = useState(null);
@@ -63,7 +63,12 @@ export function useWebSocket(frameRate = 30) {
     setWs(websocket);
 
     return () => {
-      if (websocket) {
+      // 정리된 소켓의 이벤트가 새 소켓의 상태(connected/data)를 덮어쓰지 않도록 핸들러 해제
+      websocket.onmessage = websocket.onerror = websocket.onclose = null;
+      if (websocket.readyState === WebSocket.CONNECTING) {
+        // 연결 중에 close() 하면 브라우저가 에러를 내므로 연결 직후 닫는다 (StrictMode 이중 마운트)
+        websocket.onopen = () => websocket.close();
+      } else {
         websocket.close();
       }
     };
@@ -110,4 +115,13 @@ export async function setViewState(viewState) {
   }
 
   return await response.json();
+}
+
+export async function listVideos() {
+  const response = await fetch(`${API_BASE_URL}/videos`);
+  if (!response.ok) {
+    throw new Error(`영상 목록 조회 실패 (HTTP ${response.status})`);
+  }
+  const videos = await response.json();
+  return videos.map((v) => ({ ...v, url: `${API_BASE_URL}${v.url}` }));
 }
