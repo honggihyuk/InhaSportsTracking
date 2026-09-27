@@ -154,8 +154,8 @@ def test_detection():
         print(f"\n✅ 탐지 완료: {len(detections)}개 객체 발견")
         
         for i, det in enumerate(detections):
-            print(f"   [{i}] {det['type']}: {det['class_name']} ({det['confidence']:.2f})")
-            print(f"       BBox: {det['bbox']}, Center: {det['center']}")
+            print(f"   [{i}] {det.type}: {det.class_name} ({det.confidence:.2f})")
+            print(f"       BBox: {det.bbox}, Center: {det.center}")
         
         # 시각화
         output = detector.draw_detections(test_image, detections)

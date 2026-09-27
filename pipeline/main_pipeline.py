@@ -5,18 +5,15 @@
 
 import cv2
 import numpy as np
-import torch
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 import yaml
 
-from tracking.detector import RoboflowSoccerDetector, SoccerDetector
+from tracking.detector import Detection, RoboflowSoccerDetector, SoccerDetector
 from tracking.tracker import SoccerTracker, TrackedObject
 from tracking.homography import HomographyTransformer
 from tracking.coordinate_mapper import CoordinateMapper
-from gs_model.canonical_gs import CanonicalGaussianSpace, HumanGaussianTemplate
-from gs_model.deformation_mlp import DeformationMLP, DynamicGaussianRenderer
 
 
 @dataclass
@@ -24,7 +21,7 @@ class FrameData:
     """프레임별 데이터"""
     frame_number: int
     timestamp: float
-    detections: List[Dict]  # Dict 형식 탐지 결과 사용
+    detections: List[Detection]
     tracked_objects: List[TrackedObject]
     world_coordinates: List[Dict]
     
@@ -40,18 +37,30 @@ class Soccer3DPipeline:
     5. Dynamic 3DGS 변형 및 렌더링
     """
     
-    def __init__(self, config_path: str = 'configs/model_config.yaml'):
+    def __init__(self,
+                 config_path: str = 'configs/model_config.yaml',
+                 detector=None,
+                 tracker: Optional[SoccerTracker] = None,
+                 homography: Optional[HomographyTransformer] = None,
+                 coord_mapper: Optional[CoordinateMapper] = None):
         """
         Args:
             config_path: 설정 파일 경로
+            detector: detect(frame) -> List[Detection] 를 가진 객체 주입
+                      (None 이면 initialize_components() 에서 설정대로 YOLO 로드)
+            tracker / homography / coord_mapper: 컴포넌트 주입 (None 이면 설정 기반 기본값)
         """
         self.config = self._load_config(config_path)
-        
-        # 컴포넌트 초기화
-        self.detector = None
-        self.tracker = None
-        self.homography = None
-        self.coord_mapper = None
+
+        # 가벼운 컴포넌트는 즉시 생성, 무거운 탐지기/3DGS 는 initialize_components() 에서 생성
+        track_config = self.config.get('tracker', {})
+        self.detector = detector
+        self.tracker = tracker or SoccerTracker(
+            tracker_type=track_config.get('type', 'bytetrack'),
+            track_threshold=track_config.get('track_threshold', 0.3)
+        )
+        self.homography = homography or HomographyTransformer()
+        self.coord_mapper = coord_mapper or CoordinateMapper()
         self.canonical_space = None
         self.deformation_mlp = None
         self.renderer = None
@@ -87,14 +96,16 @@ class Soccer3DPipeline:
         return config
         
     def initialize_components(self):
-        """모든 컴포넌트 초기화"""
+        """주입되지 않은 무거운 컴포넌트(탐지기, 3DGS) 초기화"""
         print("\n=== 컴포넌트 초기화 ===")
-        
+
         # 1. 객체 탐지기 - 설정에 따라 Roboflow 또는 기본 YOLO 사용
         det_config = self.config.get('detection', {})
         use_roboflow = det_config.get('use_roboflow_models', False)
-        
-        if use_roboflow:
+
+        if self.detector is not None:
+            print("✓ 주입된 탐지기 사용")
+        elif use_roboflow:
             roboflow_models = det_config.get('roboflow_models', {})
             self.detector = RoboflowSoccerDetector(
                 players_model_path=roboflow_models.get('players'),
@@ -114,22 +125,12 @@ class Soccer3DPipeline:
             )
             print("✓ SoccerDetector 초기화 완료 (기본 YOLO11)")
         
-        # 2. 객체 추적기
-        track_config = self.config.get('tracker', {})
-        self.tracker = SoccerTracker(
-            tracker_type=track_config.get('type', 'bytetrack'),
-            track_threshold=track_config.get('track_threshold', 0.3)
-        )
-        print("✓ SoccerTracker 초기화 완료")
-        
-        # 3. 호모그래피 변환기
-        self.homography = HomographyTransformer()
-        print("✓ HomographyTransformer 초기화 완료")
-        
-        # 4. 3D 좌표 매퍼
-        self.coord_mapper = CoordinateMapper()
-        print("✓ CoordinateMapper 초기화 완료")
-        
+        # 2~4. 추적기 / 호모그래피 / 좌표 매퍼는 __init__ 에서 생성 또는 주입됨
+
+        # 5~7. 3DGS: torch 가 필요하므로 여기서만 import (추적만 쓸 때는 torch 불필요)
+        from gs_model.canonical_gs import CanonicalGaussianSpace
+        from gs_model.deformation_mlp import DeformationMLP, DynamicGaussianRenderer
+
         # 5. Canonical Gaussian Space
         gs_config = self.config.get('gaussian', {})
         self.canonical_space = CanonicalGaussianSpace(
@@ -188,13 +189,13 @@ class Soccer3DPipeline:
         # 3. 호모그래피 변환 (2D → 월드 좌표)
         world_coords = []
         if self.homography.homography_matrix is not None:
-            for obj in tracked_objects:
-                world_x, world_y = self.homography.pixel_to_world(*obj.center)
+            world = self.homography.pixels_to_world([obj.center for obj in tracked_objects])
+            for obj, (world_x, world_y) in zip(tracked_objects, world):
                 world_coords.append({
                     'track_id': obj.track_id,
                     'label': obj.label,
-                    'world_x': world_x,
-                    'world_y': world_y,
+                    'world_x': float(world_x),
+                    'world_y': float(world_y),
                     'pixel_x': obj.center[0],
                     'pixel_y': obj.center[1]
                 })
@@ -239,27 +240,23 @@ class Soccer3DPipeline:
         
         processed_data = []
         frame_count = 0
-        
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-                
-            # 최대 프레임 수 체크
-            if max_frames is not None and frame_count >= max_frames:
-                break
-                
-            # 프레임 처리
-            frame_data = self.process_frame(frame)
-            processed_data.append(frame_data)
-            
-            # 진행 상황 표시
-            if frame_count % 100 == 0:
-                print(f"처리 중... {frame_count}/{total_frames if max_frames is None else max_frames}")
-                
-            frame_count += 1
-            
-        cap.release()
+
+        try:
+            # 최대 프레임 수에 도달하면 읽기 전에 중단 (불필요한 디코딩 방지)
+            while max_frames is None or frame_count < max_frames:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                processed_data.append(self.process_frame(frame))
+
+                # 진행 상황 표시
+                if frame_count % 100 == 0:
+                    print(f"처리 중... {frame_count}/{total_frames if max_frames is None else max_frames}")
+
+                frame_count += 1
+        finally:
+            cap.release()  # 처리 중 예외가 나도 비디오 핸들 해제
         
         # 결과 저장
         result_file = output_path / 'processed_data.pkl'
@@ -290,16 +287,10 @@ class Soccer3DPipeline:
             vis_frame = self.homography.draw_field_overlay(vis_frame)
             
         # 추적 객체 표시
-        color_map = {}
         for obj in frame_data.tracked_objects:
             x1, y1, x2, y2 = obj.bbox
-            
-            # ID 기반으로 색상 생성
-            if obj.track_id not in color_map:
-                np.random.seed(obj.track_id * 42)
-                color_map[obj.track_id] = tuple(map(int, np.random.randint(0, 255, 3)))
-                
-            color = color_map[obj.track_id]
+            # ID 기반 일관된 색상 (전역 난수 상태를 건드리지 않음)
+            color = tuple(map(int, np.random.default_rng(obj.track_id * 42).integers(0, 255, 3)))
             
             # 바운딩 박스
             cv2.rectangle(vis_frame, (x1, y1), (x2, y2), color, 2)

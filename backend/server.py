@@ -5,12 +5,15 @@ Soccer 3D Digital Twin - FastAPI Backend Server
 
 import asyncio
 import json
+import shutil
+from urllib.parse import quote
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
+import cv2
 import numpy as np
 
-from fastapi import FastAPI, WebSocket, UploadFile, File, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -18,6 +21,11 @@ from pydantic import BaseModel
 # 로컬 모듈 임포트 (선택적)
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
+
+# Windows 한글 콘솔(cp949)에서 이모지 등 출력 불가 문자가 있어도 서버가 죽지 않도록
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="replace")
 
 # 파이프라인은 선택적으로 임포트 (초기화 지연)
 Soccer3DPipeline = None  # 필요시 지연 로드
@@ -40,8 +48,13 @@ app.add_middleware(
 )
 
 # 전역 변수
-pipeline: Optional[Soccer3DPipeline] = None
-connected_clients: List[WebSocket] = []
+pipeline = None
+UPLOADS_DIR = Path(__file__).parent.parent / "uploads"
+STREAM_INTERVAL = 1 / 30  # 약 30 FPS
+
+# 업로드된 경기 영상 제공 (StaticFiles 는 Range 요청을 지원 → 브라우저 영상 탐색 가능)
+UPLOADS_DIR.mkdir(exist_ok=True)
+app.mount("/media", StaticFiles(directory=UPLOADS_DIR), name="media")
 
 
 # 데이터 모델
@@ -64,8 +77,19 @@ class VideoUploadResponse(BaseModel):
     status: str
     message: str
     video_path: Optional[str] = None
+    video_url: Optional[str] = None
     frame_count: int = 0
+    fps: float = 0.0
     duration: float = 0.0
+
+
+def _video_info(path: Path) -> Dict:
+    return {
+        "name": path.name,
+        "url": f"/media/{quote(path.name)}",
+        "size": path.stat().st_size,
+        "modified": path.stat().st_mtime,
+    }
 
 
 # 라우트 정의
@@ -80,6 +104,8 @@ async def root():
             "upload_video": "/upload_video",
             "process_frame": "/process_frame",
             "get_tracking_data": "/get_tracking_data/{frame}",
+            "videos": "/videos",
+            "media": "/media/{filename}",
             "websocket": "/ws/stream"
         }
     }
@@ -96,37 +122,55 @@ async def health_check():
 
 
 @app.post("/upload_video", response_model=VideoUploadResponse)
-async def upload_video(file: UploadFile = File(...)):
-    """비디오 파일 업로드 및 저장"""
+def upload_video(file: UploadFile = File(...)):
+    """비디오 파일 업로드 및 저장
+
+    동기 함수(def)로 선언 → FastAPI 가 스레드풀에서 실행하므로
+    파일 I/O·cv2 디코딩이 이벤트 루프(WebSocket 스트림)를 막지 않음.
+    """
+    # 경로 조작 방지: 디렉토리 성분을 제거하고 파일명만 사용 ("../../x" → "x")
+    filename = Path(file.filename or "").name
+    if not filename:
+        raise HTTPException(status_code=400, detail="파일명이 올바르지 않습니다.")
+
+    UPLOADS_DIR.mkdir(exist_ok=True)
+    video_path = UPLOADS_DIR / filename
     try:
-        # uploads 디렉토리 생성
-        uploads_dir = Path(__file__).parent.parent / "uploads"
-        uploads_dir.mkdir(exist_ok=True)
-        
-        # 파일 저장
-        video_path = uploads_dir / file.filename
+        # 전체를 메모리에 올리지 않고 청크 단위로 복사
         with open(video_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
-        
-        # 비디오 정보 추출 (간단한 구현)
-        import cv2
+            shutil.copyfileobj(file.file, buffer)
+
         cap = cv2.VideoCapture(str(video_path))
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        duration = frame_count / fps if fps > 0 else 0.0
-        cap.release()
-        
-        return VideoUploadResponse(
-            status="success",
-            message=f"비디오 '{file.filename}' 업로드 완료",
-            video_path=str(video_path),
-            frame_count=frame_count,
-            duration=duration
-        )
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"업로드 오류: {str(e)}")
+        try:
+            opened = cap.isOpened()
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+        finally:
+            cap.release()
+    except OSError as e:
+        video_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"업로드 오류: {e}")
+
+    if not opened or frame_count <= 0:
+        video_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"'{filename}' 은(는) 읽을 수 있는 비디오 파일이 아닙니다.")
+
+    return VideoUploadResponse(
+        status="success",
+        message=f"비디오 '{filename}' 업로드 완료",
+        video_path=str(video_path),
+        video_url=_video_info(video_path)["url"],
+        frame_count=frame_count,
+        fps=fps,
+        duration=frame_count / fps if fps > 0 else 0.0
+    )
+
+
+@app.get("/videos")
+def list_videos():
+    """업로드된 경기 영상 목록 (최신순)"""
+    files = [p for p in UPLOADS_DIR.iterdir() if p.is_file()]
+    return [_video_info(p) for p in sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)]
 
 
 @app.get("/process_frame/{frame_number}")
@@ -160,35 +204,45 @@ async def get_tracking_data(frame: int):
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket을 통한 실시간 트랙킹 데이터 스트리밍"""
     await websocket.accept()
-    connected_clients.append(websocket)
-    
-    try:
-        frame = 0
+    # resend: 일시정지 중 탐색했을 때 해당 프레임을 한 번 전송하기 위한 플래그
+    state = {"frame": 0, "paused": False, "resend": False}
+
+    async def receive_controls():
+        """클라이언트 제어 메시지(start/pause/seek) 수신 — 송신 루프와 독립적으로 동작"""
         while True:
-            # 클라이언트로부터 메시지 대기 (예: 재생/일시정지 제어)
-            data = await asyncio.wait_for(websocket.receive_text(), timeout=0.1)
-            
-            # 메시지 처리
-            if data:
+            data = await websocket.receive_text()
+            try:
                 message = json.loads(data)
                 if message.get("type") == "start":
-                    frame = message.get("frame", 0)
+                    state["frame"] = int(message.get("frame", state["frame"]))
+                    state["paused"] = False
                 elif message.get("type") == "pause":
-                    await asyncio.sleep(0.1)
-                    continue
-            
-            # 트랙킹 데이터 생성 및 전송
-            tracking_data = generate_dummy_tracking_data(frame)
-            await websocket.send_json(tracking_data)
-            
-            frame += 1
-            await asyncio.sleep(0.033)  # 약 30 FPS
-    
-    except Exception as e:
-        print(f"WebSocket 오류: {e}")
+                    state["paused"] = True
+                elif message.get("type") == "seek":
+                    # 영상 탐색 동기화: 지정 프레임으로 이동하고 재생/정지 상태를 함께 설정
+                    state["frame"] = int(message["frame"])
+                    state["paused"] = bool(message.get("paused", state["paused"]))
+                    state["resend"] = True
+            except (ValueError, TypeError, AttributeError, KeyError):
+                continue  # 잘못된 JSON/필드는 무시하고 연결 유지
+
+    receiver = asyncio.create_task(receive_controls())
+    loop = asyncio.get_running_loop()
+    next_tick = loop.time()
+    try:
+        while not receiver.done():  # 수신 태스크가 끝났다 = 클라이언트 연결 종료
+            if not state["paused"] or state["resend"]:
+                state["resend"] = False
+                await websocket.send_json(generate_dummy_tracking_data(state["frame"]))
+                if not state["paused"]:
+                    state["frame"] += 1
+            # 고정 sleep 대신 목표 시각까지 대기 → 전송 시간·타이머 오차가 누적되지 않음
+            next_tick = max(next_tick + STREAM_INTERVAL, loop.time() - STREAM_INTERVAL)
+            await asyncio.sleep(max(0.0, next_tick - loop.time()))
+    except WebSocketDisconnect:
+        pass
     finally:
-        connected_clients.remove(websocket)
-        await websocket.close()
+        receiver.cancel()
 
 
 @app.post("/set_view_state")
@@ -205,32 +259,33 @@ async def set_view_state(view_state: ViewState):
 # 유틸리티 함수
 def generate_dummy_tracking_data(frame: int) -> Dict:
     """더미 트랙킹 데이터 생성 (테스트용)"""
-    np.random.seed(frame)  # 재현성을 위한 시드 설정
-    
+    # 프레임별 독립 난수 생성기: 재현성 유지 + 전역 np.random 상태 오염 없음(동시 요청 안전)
+    rng = np.random.default_rng(frame)
+
     # 선수들 생성 (11 명)
     players = []
     for i in range(11):
         players.append({
             "id": i,
             "position_3d": [
-                float(np.random.uniform(-52.5, 52.5)),  # X: 경기장 길이
-                float(np.random.uniform(-34.0, 34.0)),  # Y: 경기장 너비
+                float(rng.uniform(-52.5, 52.5)),  # X: 경기장 길이
+                float(rng.uniform(-34.0, 34.0)),  # Y: 경기장 너비
                 0.0  # Z: 지면
             ],
-            "velocity": float(np.random.uniform(0, 8)),  # m/s
+            "velocity": float(rng.uniform(0, 8)),  # m/s
             "team": "home" if i < 6 else "away",
-            "confidence": float(np.random.uniform(0.8, 1.0))
+            "confidence": float(rng.uniform(0.8, 1.0))
         })
-    
+
     # 공 생성
     ball = {
         "position_3d": [
-            float(np.random.uniform(-52.5, 52.5)),
-            float(np.random.uniform(-34.0, 34.0)),
-            float(np.random.uniform(0, 0.5))  # 공 높이
+            float(rng.uniform(-52.5, 52.5)),
+            float(rng.uniform(-34.0, 34.0)),
+            float(rng.uniform(0, 0.5))  # 공 높이
         ],
-        "velocity": float(np.random.uniform(0, 20)),
-        "confidence": float(np.random.uniform(0.9, 1.0))
+        "velocity": float(rng.uniform(0, 20)),
+        "confidence": float(rng.uniform(0.9, 1.0))
     }
     
     # 호모그래피 행렬 (더미)
