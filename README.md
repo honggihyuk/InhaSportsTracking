@@ -13,7 +13,8 @@
 ### 핵심 기술 스택
 
 - **Object Detection**: YOLO11 + Roboflow 축구 전문 모델
-- **Tracking**: ByteTrack / BoT-SORT (boxmot) 또는 SimpleTracker, 공 전용 BallTracker
+- **Tracking**: BoT-SORT + 카메라 움직임 보정 (boxmot), 공 전용 BallTracker
+- **Camera Motion / Calibration**: 광류 기반 프레임 간 호모그래피 + 키프레임 경기장 보정 전파
 - **Coordinate Mapping**: Homography (픽셀 → 경기장 미터 좌표)
 - **Backend**: FastAPI + WebSocket (30 FPS 트래킹 스트림)
 - **Frontend**: React 19 + Vite + Three.js (React Three Fiber)
@@ -21,13 +22,11 @@
 
 ### 주요 기능
 
-1. **객체 탐지 및 추적**: 선수·공·심판 탐지, 추적 ID 유지, 공은 항상 단일 ID(0)로 추적
-2. **2D → 경기장 좌표 변환**: 호모그래피로 FIFA 규격(105 × 68 m) 경기장 좌표 매핑
-3. **경기 영상 플레이어**: 영상 업로드·라이브러리·재생, 탐색 가능한 스트리밍(HTTP Range)
-4. **3D 디지털 트윈**: 영상과 동기화된 3D 경기 재현 (자유 시점 / 탑다운 / 선수 시점)
-5. **실시간 통계**: 팀별 선수 수·평균/최고 속도, 볼 소유, 공 속도·위치
-
-> ⚠️ 현재 3D 트윈의 선수·공 위치는 **더미 데이터**입니다. 분석 파이프라인 결과 연동이 다음 단계입니다.
+1. **업로드 영상 분석**: 선수·공 탐지 → 관중 제거 → 추적(공은 항상 ID 0) → 유니폼 색 팀 분류 → 카메라 움직임 추정 (백그라운드 작업, 진행률 표시)
+2. **탐지 박스 오버레이**: 경기 영상 위에 어떤 선수(`#ID`, 팀 색)와 공(`BALL`)을 인식했는지 프레임 단위로 표시
+3. **경기장 보정**: 한 프레임에서 경기장 기준점 4 개 이상을 지정하면 카메라 팬·줌을 따라 전 프레임에 전파
+4. **3D 디지털 트윈 연동**: 분석·보정된 선수·공 위치를 영상과 같은 프레임으로 3D 재현 (자유 시점 / 탑다운 / 선수 시점)
+5. **통계**: 팀별 선수 수·평균/최고 속도, 볼 소유, 공 속도·위치
 
 ---
 
@@ -54,7 +53,8 @@ InhaSportsTracking/
 │       ├── index.css       # 디자인 토큰 및 스타일
 │       └── components/api.js # REST / WebSocket 클라이언트
 ├── tests/
-│   └── test_core.py        # 단위·통합 테스트 (pytest)
+│   ├── test_core.py        # 탐지·추적·API 테스트 (pytest)
+│   └── test_analysis.py    # 영상 분석·경기장 보정 테스트
 ├── docs/
 │   └── PROJECT_OVERVIEW.md # 기술·기능 명세 및 로드맵
 ├── configs/
@@ -88,7 +88,14 @@ npm install
 npm run dev
 ```
 
-브라우저에서 `http://localhost:5173` 에 접속한 뒤, 오른쪽 라이브러리에서 **업로드**로 경기 영상을 올리면 3D 트윈과 같은 타임라인으로 재생됩니다.
+브라우저에서 `http://localhost:5173` 에 접속합니다.
+
+1. 라이브러리에서 **업로드**로 경기 영상을 올리고 선택합니다.
+2. **영상 분석** 카드에서 **분석 시작** — 완료되면 영상 위에 탐지 박스가 표시됩니다.
+3. **경기장 보정** — 오른쪽 도면에서 기준점(코너, 페널티박스 모서리, 센터서클과 하프라인 교점 등)을 선택하고 영상에서 같은 지점을 클릭합니다. 한 직선 위에 있지 않은 4 점 이상이면 저장할 수 있습니다.
+4. 3D 트윈이 분석 데이터로 전환되어 영상과 함께 재생됩니다. 장면 전환 이후 구간은 그 구간에서 보정을 추가하세요.
+
+> CPU 에서는 분석이 영상 길이의 수십 배 걸립니다 (5 코어 기준 약 1 초/프레임). GPU 가 있으면 `detection.device: cuda`, `analysis.stride: 1` 을 권장합니다.
 
 > 브라우저가 재생할 수 있는 **H.264(MP4)** 또는 **VP9/AV1(WebM)** 영상을 사용하세요. 다른 코덱은 다음과 같이 변환합니다.
 >
@@ -114,7 +121,7 @@ python -m pipeline.main_pipeline --config configs/model_config.yaml --video <영
 python -m pytest tests -q
 ```
 
-torch·ultralytics 없이 실행됩니다 (22개 테스트).
+YOLO·GPU 없이 합성 영상과 가짜 탐지기로 실행됩니다.
 
 ---
 
@@ -148,7 +155,7 @@ API 키 발급: https://app.roboflow.com/settings/api
 
 ```yaml
 detection:
-  model_path: "models/yolo11s.pt"
+  model_path: "models/yolo11n.pt"   # CPU 기본값, GPU 에서는 yolo11s 권장
   use_roboflow_models: false   # true 면 roboflow_models 경로의 전문 모델 사용
   roboflow_models:
     players: "data/roboflow_datasets/football-players-detection-3zvbc/weights/best.pt"
@@ -156,30 +163,32 @@ detection:
   confidence_threshold: 0.25
   device: "cpu"                # cpu 또는 cuda
 
+analysis:
+  stride: 3                    # N 프레임마다 탐지, 사이는 보간 (GPU 면 1)
+  ball_imgsz: 960              # 공 모델 추론 해상도
+
 tracking:
-  type: "bytetrack"            # bytetrack | botsort | simple
+  type: "botsort"              # botsort(카메라 움직임 보정, 권장) | bytetrack | simple
   track_threshold: 0.3
   match_threshold: 0.8         # 매칭 비용(1 - IoU) 상한
   max_age: 30
 ```
-
-> ⚠️ 현재 파이프라인은 추적 설정을 `tracker` 키에서 읽어 `tracking:` 섹션이 적용되지 않습니다. ([알려진 이슈](./docs/PROJECT_OVERVIEW.md#5-알려진-제약-및-이슈))
 
 ---
 
 ## 📈 아키텍처
 
 ```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  Video Input    │────▶│  Object Detection│────▶│  Object Tracking│
-│  (MP4, WebM)    │     │  (YOLO11)        │     │  (ByteTrack +   │
-└─────────────────┘     └──────────────────┘     │   BallTracker)  │
-                                                 └────────┬────────┘
-                                                          ▼
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  Web Frontend   │◀────│  FastAPI         │◀╌╌╌╌│  Homography     │
-│  영상 + 3D 트윈 │ WS  │  WebSocket 30FPS │ 예정 │  경기장 좌표    │
-└─────────────────┘     └──────────────────┘     └─────────────────┘
+업로드 영상 ──▶ YOLO11 탐지 ──▶ 잔디 필터 ──▶ BoT-SORT + BallTracker ──▶ 유니폼 색 팀 분류
+     │                                                │
+     └──▶ 광류 카메라 움직임 (프레임 간 호모그래피) ──┤
+                                                      ▼
+                                   uploads/analysis/{영상}.json
+                                                      │
+     경기장 보정 (기준점 4+) ──▶ 키프레임 호모그래피 × 카메라 움직임 ──▶ 프레임별 경기장 좌표
+                                                      │
+                                                      ▼
+            Web: 경기 영상 + 탐지 박스 오버레이  ⇄  3D 디지털 트윈 · 통계  (영상 프레임 단위 동기화)
 ```
 
 ---
@@ -216,14 +225,13 @@ tracking:
 ## 🚧 개발 현황
 
 - ✅ YOLO11 모델 통합 · Roboflow 데이터셋 연동
-- ✅ 객체 탐지 및 추적 모듈 (공 단일 ID 추적 포함)
-- ✅ 호모그래피 좌표 변환
-- ✅ FastAPI 백엔드 · WebSocket 스트리밍 · 영상 업로드/제공
-- ✅ Web 프론트엔드 (영상 플레이어 + 3D 트윈 동기화)
+- ✅ 객체 탐지 및 추적 (BoT-SORT 카메라 움직임 보정, 공 단일 ID)
+- ✅ 업로드 영상 분석 작업 · 탐지 박스 오버레이 · 팀 자동 분류
+- ✅ 경기장 보정 (키프레임 + 카메라 움직임 전파) → 3D 트윈 연동
+- ✅ FastAPI 백엔드 · 영상 업로드/제공 · Web 프론트엔드
 - ✅ 단위·통합 테스트
 - 🔶 3D Gaussian Splatting — 표준 공간·변형 MLP 모듈만 구현, 렌더링 미연동
-- ⏳ 분석 파이프라인 결과 → 3D 트윈 연동 (현재 더미 데이터)
-- ⏳ 자동 캘리브레이션 · 팀 자동 분류
+- ⏳ 자동 경기장 보정 · 공 전용 탐지 모델 · GPU 추론
 - ⏳ 히트맵 · 패스 네트워크 등 전술 분석 도구
 - ⏳ SMPL 포즈 복원
 
