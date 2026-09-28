@@ -137,7 +137,7 @@ def test_soccer_tracker_backend_injection():
     t = SoccerTracker(backend_factory=FakeBackend)
     objs = t.update([det((0, 0, 10, 20), class_id=1, class_name="player_goalkeeper"), ball((50, 50, 55, 55))])
     assert calls[0].shape == (1, 6)  # 공은 다중 객체 추적기로 가지 않음
-    assert {(o.track_id, o.label) for o in objs} == {(42, "goalkeeper"), (SoccerTracker.BALL_TRACK_ID, "ball")}
+    assert {(o.track_id, o.label) for o in objs} == {(43, "goalkeeper"), (SoccerTracker.BALL_TRACK_ID, "ball")}
 
 
 # --- detector (가짜 YOLO 모델) ------------------------------------------
@@ -161,9 +161,18 @@ class _FakeModel:
         return [types.SimpleNamespace(boxes=_FakeBoxes(self.rows) if self.rows else None)]
 
 
+def test_coco_class_filter_only_for_generic_models():
+    coco = types.SimpleNamespace(names={0: "person", 32: "sports ball", 56: "chair"})
+    football = types.SimpleNamespace(names={0: "ball", 1: "goalkeeper", 2: "player"})
+    assert detector_mod._coco_class_ids(coco, "sports ball") == [32]
+    assert detector_mod._coco_class_ids(coco, "person") == [0]
+    assert detector_mod._coco_class_ids(football, "person") is None  # 전용 모델은 필터 없음
+
+
 def test_detector_detect_with_offsets():
     d = detector_mod.RoboflowSoccerDetector.__new__(detector_mod.RoboflowSoccerDetector)
     d.confidence_threshold, d.iou_threshold, d.device = 0.5, 0.45, "cpu"
+    d.imgsz, d.ball_imgsz, d.player_classes, d.ball_classes = 640, 1280, None, None
     d.players_model = _FakeModel([[10, 20, 30, 60, 0.9, 0]])
     d.ball_model = _FakeModel([[5, 5, 9, 9, 0.8, 0]])
     d.field_model = None

@@ -42,7 +42,7 @@ class SimpleTracker:
         self.match_threshold = match_threshold
         self.max_age = max_age
         self.trackers = {}  # track_id -> {bbox, age, class_id, label}
-        self.next_id = 1  # 0 은 공 전용 ID(SoccerTracker.BALL_TRACK_ID)로 예약, boxmot 도 1 부터 시작
+        self.next_id = 0
         
     def update(self, det_array: np.ndarray, frame: Optional[np.ndarray] = None) -> np.ndarray:
         """
@@ -123,14 +123,21 @@ def make_tracker(tracker_type: str = 'bytetrack',
         raise ValueError(f"지원하지 않는 추적기 타입: {tracker_type}")
     try:
         import boxmot
-        cls = boxmot.BYTETracker if tracker_type == 'bytetrack' else boxmot.BoTSORT
-        tracker = cls(track_thresh=track_threshold, match_thresh=match_threshold,
-                      track_buffer=max_age, frame_rate=frame_rate)
-        print(f"추적기 초기화 완료: {tracker_type}")
+        if tracker_type == 'bytetrack':
+            # boxmot >= 11: ByteTrack, 이전 버전: BYTETracker
+            cls = getattr(boxmot, 'ByteTrack', None) or boxmot.BYTETracker
+            tracker = cls(track_thresh=track_threshold, match_thresh=match_threshold,
+                          track_buffer=max_age, frame_rate=frame_rate)
+        else:
+            # BoT-SORT: ReID 가중치 없이 카메라 움직임 보정(CMC)만 사용 — 움직이는 중계 화면에서 ID 가 가장 안정적
+            cls = getattr(boxmot, 'BotSort', None) or boxmot.BoTSORT
+            tracker = cls(track_high_thresh=track_threshold, match_thresh=match_threshold,
+                          track_buffer=max_age, frame_rate=frame_rate, use_embeddings=False,
+                          cmc_method='sof')  # 희소 광류 CMC: 중계 카메라 팬·줌 보정, ecc 보다 빠름
+        print(f"추적기 초기화 완료: {tracker_type} ({cls.__name__})")
         return tracker
     except (ImportError, AttributeError, TypeError) as e:  # 미설치 / 버전별 클래스명·생성자 인자 불일치
         print(f"boxmot 을 사용할 수 없어 SimpleTracker 로 대체합니다. ({e})")
-        print("pip install boxmot==10.0.84 를 실행하여 호환 버전을 설치해주세요.")
         return simple()
 
 
@@ -191,7 +198,7 @@ class SoccerTracker:
     - 공: BallTracker 로 단일 ID(BALL_TRACK_ID) 유지
     """
 
-    BALL_TRACK_ID = 0  # 공 전용 ID (다중 객체 추적기 ID 는 1 부터 시작하므로 겹치지 않음)
+    BALL_TRACK_ID = 0  # 공 전용 ID. 다중 객체 추적기 ID 는 +1 해서 1 부터 쓰므로 겹치지 않음
 
     def __init__(self,
                  tracker_type: str = 'bytetrack',
@@ -248,7 +255,7 @@ class SoccerTracker:
             # boxmot / SimpleTracker 모두 7번째 열에 class_id 를 반환
             class_id = int(track[6]) if len(track) > 6 else 0
             tracked_objects.append(self._upsert(
-                track_id=int(track[4]),
+                track_id=int(track[4]) + 1,  # 백엔드(boxmot 은 0 부터 시작) ID 를 공 ID 와 분리
                 bbox=tuple(map(int, track[:4])),
                 confidence=float(track[5]) if len(track) > 5 else 1.0,
                 class_id=class_id,

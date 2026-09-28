@@ -6,6 +6,7 @@ Soccer 3D Digital Twin - FastAPI Backend Server
 import asyncio
 import json
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +16,7 @@ import numpy as np
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -171,6 +173,141 @@ def list_videos():
     """업로드된 경기 영상 목록 (최신순)"""
     files = [p for p in UPLOADS_DIR.iterdir() if p.is_file()]
     return [_video_info(p) for p in sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)]
+
+
+# ---------------------------------------------------------------------------
+# 영상 분석 (탐지·추적 → 결과 JSON, 경기장 보정)
+# ---------------------------------------------------------------------------
+ANALYSIS_DIR = UPLOADS_DIR / "analysis"
+CONFIG_PATH = Path(__file__).parent.parent / "configs" / "model_config.yaml"
+analysis_jobs: Dict[str, Dict] = {}  # 영상 이름 → {state, progress, error}
+# CPU 추론은 동시에 돌리면 서로 느려지기만 하므로 한 번에 하나씩 처리
+# ponytail: 메모리 내 작업 상태 — 서버 재시작 시 진행 중 작업은 사라짐 (완료 결과는 파일로 남음)
+analysis_executor = ThreadPoolExecutor(max_workers=1)
+
+
+class CalibrationPoint(BaseModel):
+    image: List[float]  # [u, v] 원본 해상도 픽셀
+    pitch: List[float]  # [x, y] 경기장 좌표 (m)
+
+
+class CalibrationKeyframe(BaseModel):
+    frame: int
+    points: List[CalibrationPoint]
+
+
+class CalibrationRequest(BaseModel):
+    keyframes: List[CalibrationKeyframe]
+
+
+def _video_file(name: str) -> Path:
+    path = UPLOADS_DIR / Path(name).name  # 경로 조작 방지
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"'{name}' 영상이 없습니다.")
+    return path
+
+
+def _analysis_file(name: str) -> Path:
+    return ANALYSIS_DIR / f"{Path(name).name}.json"
+
+
+def _get_pipeline():
+    """탐지 모델은 무거우므로 첫 분석 때 한 번만 로드 (분석 작업 스레드에서만 호출)"""
+    global pipeline
+    if pipeline is None:
+        import os
+        import torch
+        # 분석이 CPU 를 전부 쓰면 같은 PC 의 브라우저(3D 화면)와 API 응답이 멈춘 듯 느려진다 → 코어 2 개는 남김
+        threads = max(1, (os.cpu_count() or 2) - 2)
+        torch.set_num_threads(threads)
+        cv2.setNumThreads(threads)
+        from pipeline.main_pipeline import Soccer3DPipeline as Pipeline
+        p = Pipeline(config_path=str(CONFIG_PATH))
+        p.initialize_detector()
+        pipeline = p
+    return pipeline
+
+
+def _run_analysis(name: str):
+    from pipeline import video_analysis
+    from tracking.tracker import BallTracker
+
+    job = analysis_jobs[name]
+    try:
+        job["state"] = "running"
+        p = _get_pipeline()
+        stride = int(p.config.get("analysis", {}).get("stride", 1))
+        tracker = p.make_tracker()  # 영상마다 추적 ID 를 새로 시작
+        tracker.ball_tracker = BallTracker(max_jump=60 * stride)  # 탐지 간격만큼 공 이동 허용 범위 확대
+        result = video_analysis.analyze_video(
+            _video_file(name), p.detector, tracker, stride=stride,
+            progress=lambda done, total: job.update(progress=done / max(total, 1)))
+        video_analysis.save(result, _analysis_file(name))
+        job.update(state="done", progress=1.0)
+    except Exception as e:  # 작업 스레드 예외는 상태로 전달
+        print(f"분석 실패 ({name}): {e}")
+        job.update(state="error", error=str(e))
+
+
+def _analysis_status(name: str) -> Dict:
+    job = analysis_jobs.get(name)
+    if job and job["state"] in ("queued", "running", "error"):
+        return {"name": name, **job}
+    path = _analysis_file(name)
+    if path.is_file():
+        from pipeline import video_analysis
+        calibrated = video_analysis.load(path).get("calibration") is not None
+        return {"name": name, "state": "done", "progress": 1.0, "calibrated": calibrated}
+    return {"name": name, "state": "none", "progress": 0.0}
+
+
+@app.post("/analysis/{name}")
+def start_analysis(name: str):
+    """영상 분석 시작 (백그라운드). 이미 진행 중이면 409"""
+    _video_file(name)
+    if analysis_jobs.get(name, {}).get("state") in ("queued", "running"):
+        raise HTTPException(status_code=409, detail="이미 분석 중입니다.")
+    analysis_jobs[name] = {"state": "queued", "progress": 0.0}
+    analysis_executor.submit(_run_analysis, name)
+    return _analysis_status(name)
+
+
+@app.get("/analysis/{name}/status")
+def analysis_status(name: str):
+    _video_file(name)
+    return _analysis_status(name)
+
+
+@app.get("/analysis/{name}")
+def get_analysis(name: str):
+    """분석 결과 JSON (프레임별 박스·카메라 움직임·팀·경기장 좌표)"""
+    path = _analysis_file(name)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="분석 결과가 없습니다.")
+    return FileResponse(path, media_type="application/json")
+
+
+@app.post("/analysis/{name}/calibration")
+def save_calibration(name: str, body: CalibrationRequest):
+    """키프레임 보정점 저장 → 카메라 움직임으로 전 프레임에 전파해 경기장 좌표 계산"""
+    from pipeline import video_analysis
+
+    path = _analysis_file(name)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="먼저 영상을 분석하세요.")
+    if not body.keyframes:
+        raise HTTPException(status_code=400, detail="보정 키프레임이 없습니다.")
+    for kf in body.keyframes:
+        if any(len(p.image) != 2 or len(p.pitch) != 2 for p in kf.points):
+            raise HTTPException(status_code=400, detail="보정점 좌표는 [x, y] 형식이어야 합니다.")
+    result = video_analysis.load(path)
+    try:
+        video_analysis.calibrate(result, [kf.model_dump() for kf in body.keyframes])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    video_analysis.save(result, path)
+    covered = sum(w is not None for w in result["world"])
+    return {"name": name, "calibrated_frames": covered, "frame_count": result["frame_count"]}
 
 
 @app.get("/process_frame/{frame_number}")

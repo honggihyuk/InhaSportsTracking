@@ -49,6 +49,14 @@ class Detection:
         return self.class_name.removeprefix(f"{self.type}_")
 
 
+def _coco_class_ids(model, name: str) -> Optional[List[int]]:
+    """COCO 범용 모델이면 name 클래스 ID 목록, 전용 모델(Roboflow 등)이면 None(필터 없음)"""
+    names = getattr(model, 'names', None) or {}
+    if 'sports ball' not in names.values():
+        return None
+    return [i for i, n in names.items() if n == name]
+
+
 def _yolo(path: str):
     # ultralytics(torch) 는 무거우므로 실제 모델을 만들 때만 import
     from ultralytics import YOLO
@@ -68,7 +76,9 @@ class RoboflowSoccerDetector:
         field_model_path: Optional[str] = None,
         confidence_threshold: float = 0.5,
         iou_threshold: float = 0.45,
-        device: str = "cpu"  # 'cuda' 또는 'cpu'
+        device: str = "cpu",  # 'cuda' 또는 'cpu'
+        imgsz: int = 640,
+        ball_imgsz: int = 1280
     ):
         """
         Args:
@@ -78,10 +88,14 @@ class RoboflowSoccerDetector:
             confidence_threshold: 신뢰도 임계값
             iou_threshold: NMS IoU 임계값
             device: 디바이스 ('cuda', 'cpu', 'mps')
+            imgsz: 선수/필드 모델 추론 해상도
+            ball_imgsz: 공 모델 추론 해상도 (중계 화면의 공은 수 픽셀이라 더 높게)
         """
         self.confidence_threshold = confidence_threshold
         self.iou_threshold = iou_threshold
         self.device = device
+        self.imgsz = imgsz
+        self.ball_imgsz = ball_imgsz
         
         # 모델 경로 설정
         base_path = Path("data/roboflow_datasets")
@@ -120,6 +134,11 @@ class RoboflowSoccerDetector:
         
         # 클래스 매핑
         self.class_names = self._get_class_names()
+
+        # COCO 범용 모델이면 필요한 클래스만 추론 (선수 모델=person, 공 모델=sports ball).
+        # 필터가 없으면 공 모델이 사람·의자 등 80 개 클래스를 모두 공 후보로 낸다.
+        self.player_classes = _coco_class_ids(self.players_model, 'person')
+        self.ball_classes = _coco_class_ids(self.ball_model, 'sports ball')
         
         print(f"✅ Roboflow Soccer Detector 초기화 완료")
         print(f"   Device: {device}")
@@ -187,19 +206,25 @@ class RoboflowSoccerDetector:
         """
         detections = []
         if detect_players:
-            detections += self._predict(frame, self.players_model, 0, 'player')
+            detections += self._predict(frame, self.players_model, 0, 'player',
+                                        self.player_classes, self.imgsz)
         if detect_ball:
-            detections += self._predict(frame, self.ball_model, self.BALL_OFFSET, 'ball')
+            detections += self._predict(frame, self.ball_model, self.BALL_OFFSET, 'ball',
+                                        self.ball_classes, self.ball_imgsz)
         if detect_field and self.field_model:
-            detections += self._predict(frame, self.field_model, self.FIELD_OFFSET, 'field')
+            detections += self._predict(frame, self.field_model, self.FIELD_OFFSET, 'field',
+                                        None, self.imgsz)
         return detections
 
-    def _predict(self, frame: np.ndarray, model, offset: int, det_type: str) -> List[Detection]:
+    def _predict(self, frame: np.ndarray, model, offset: int, det_type: str,
+                 classes: Optional[List[int]] = None, imgsz: int = 640) -> List[Detection]:
         """단일 모델 추론 → Detection 으로 변환 (offset 으로 모델 간 class_id 충돌 방지)"""
         results = model.predict(
             source=frame,
             conf=self.confidence_threshold,
             iou=self.iou_threshold,
+            classes=classes,
+            imgsz=imgsz,
             verbose=False,
             device=self.device
         )

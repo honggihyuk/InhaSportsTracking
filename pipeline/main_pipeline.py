@@ -53,12 +53,8 @@ class Soccer3DPipeline:
         self.config = self._load_config(config_path)
 
         # 가벼운 컴포넌트는 즉시 생성, 무거운 탐지기/3DGS 는 initialize_components() 에서 생성
-        track_config = self.config.get('tracker', {})
         self.detector = detector
-        self.tracker = tracker or SoccerTracker(
-            tracker_type=track_config.get('type', 'bytetrack'),
-            track_threshold=track_config.get('track_threshold', 0.3)
-        )
+        self.tracker = tracker or self.make_tracker()
         self.homography = homography or HomographyTransformer()
         self.coord_mapper = coord_mapper or CoordinateMapper()
         self.canonical_space = None
@@ -84,7 +80,7 @@ class Soccer3DPipeline:
                     'confidence_threshold': 0.5,
                     'model_path': 'models/yolo_soccer.pt'
                 },
-                'tracker': {
+                'tracking': {
                     'type': 'bytetrack',
                     'track_threshold': 0.3
                 },
@@ -95,11 +91,26 @@ class Soccer3DPipeline:
             }
         return config
         
+    def make_tracker(self) -> SoccerTracker:
+        """설정(tracking 섹션) 기반 새 추적기 — 영상마다 ID 를 새로 시작할 때 사용"""
+        # 설정 파일은 'tracking' 키를 사용 (이전 기본 설정의 'tracker' 도 호환)
+        track_config = self.config.get('tracking', self.config.get('tracker', {}))
+        return SoccerTracker(
+            tracker_type=track_config.get('type', 'bytetrack'),
+            track_threshold=track_config.get('track_threshold', 0.3),
+            match_threshold=track_config.get('match_threshold', 0.8),
+            max_age=track_config.get('max_age', 30),
+        )
+
     def initialize_components(self):
         """주입되지 않은 무거운 컴포넌트(탐지기, 3DGS) 초기화"""
         print("\n=== 컴포넌트 초기화 ===")
 
-        # 1. 객체 탐지기 - 설정에 따라 Roboflow 또는 기본 YOLO 사용
+        self.initialize_detector()
+        self._initialize_gaussian()
+
+    def initialize_detector(self):
+        """탐지기 초기화 (주입되었으면 그대로 사용) - 설정에 따라 Roboflow 또는 기본 YOLO"""
         det_config = self.config.get('detection', {})
         use_roboflow = det_config.get('use_roboflow_models', False)
 
@@ -112,7 +123,9 @@ class Soccer3DPipeline:
                 ball_model_path=roboflow_models.get('ball'),
                 field_model_path=roboflow_models.get('field'),
                 confidence_threshold=det_config.get('confidence_threshold', 0.5),
-                device=self.device
+                device=self.device,
+                imgsz=det_config.get('img_size', 640),
+                ball_imgsz=self.config.get('analysis', {}).get('ball_imgsz', 1280)
             )
             print("✓ RoboflowSoccerDetector 초기화 완료 (전문 모델)")
         else:
@@ -121,18 +134,21 @@ class Soccer3DPipeline:
             self.detector = SoccerDetector(
                 players_model_path=model_path,
                 confidence_threshold=det_config.get('confidence_threshold', 0.5),
-                device=self.device
+                device=self.device,
+                imgsz=det_config.get('img_size', 640),
+                ball_imgsz=self.config.get('analysis', {}).get('ball_imgsz', 1280)
             )
             print("✓ SoccerDetector 초기화 완료 (기본 YOLO11)")
         
-        # 2~4. 추적기 / 호모그래피 / 좌표 매퍼는 __init__ 에서 생성 또는 주입됨
-
-        # 5~7. 3DGS: torch 가 필요하므로 여기서만 import (추적만 쓸 때는 torch 불필요)
+    def _initialize_gaussian(self):
+        """3DGS 컴포넌트 초기화 (추적기 / 호모그래피 / 좌표 매퍼는 __init__ 에서 생성 또는 주입됨)"""
+        # 3DGS: torch 가 필요하므로 여기서만 import (추적만 쓸 때는 torch 불필요)
         from gs_model.canonical_gs import CanonicalGaussianSpace
         from gs_model.deformation_mlp import DeformationMLP, DynamicGaussianRenderer
 
         # 5. Canonical Gaussian Space
-        gs_config = self.config.get('gaussian', {})
+        # 설정 파일은 gaussian_splatting.canonical_space 를 사용 (이전 기본 설정의 'gaussian' 도 호환)
+        gs_config = self.config.get('gaussian_splatting', {}).get('canonical_space') or self.config.get('gaussian', {})
         self.canonical_space = CanonicalGaussianSpace(
             num_gaussians=gs_config.get('num_gaussians', 10000),
             sh_degree=gs_config.get('sh_degree', 3),
