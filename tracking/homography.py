@@ -148,7 +148,16 @@ class HomographyTransformer:
         world_point = cv2.perspectiveTransform(pixel_point, self.homography_matrix)
         
         return (world_point[0, 0, 0], world_point[0, 0, 1])
-        
+
+    def pixels_to_world(self, pixels: List[Tuple[float, float]]) -> np.ndarray:
+        """여러 픽셀 좌표를 한 번의 호출로 월드 좌표 (N, 2) 로 변환"""
+        if self.homography_matrix is None:
+            raise ValueError("호모그래피 행렬이 설정되지 않았습니다.")
+        if len(pixels) == 0:
+            return np.empty((0, 2), dtype=np.float32)
+        pts = np.asarray(pixels, dtype=np.float32).reshape(-1, 1, 2)
+        return cv2.perspectiveTransform(pts, self.homography_matrix).reshape(-1, 2)
+
     def world_to_pixel(self, world_x: float, world_y: float) -> Tuple[float, float]:
         """
         월드 좌표를 픽셀 좌표로 변환

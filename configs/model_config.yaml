@@ -11,7 +11,8 @@ detection:
   # Primary model: YOLO11s (COCO pretrained)
   # Downloaded from Ultralytics official repository
   # Location: models/yolo11s.pt (18.4MB)
-  model_path: "models/yolo11s.pt"
+  # CPU 기본값은 yolo11n (선수 탐지율은 비슷하고 약 3 배 빠름). GPU 에서는 yolo11s 권장
+  model_path: "models/yolo11n.pt"
   
   # Roboflow 전문 모델 사용 여부 (false 이면 기본 YOLO11 사용)
   use_roboflow_models: false
@@ -39,9 +40,14 @@ detection:
     0: "person"
     32: "sports ball"
 
+# 업로드 영상 분석 (backend /analysis)
+analysis:
+  stride: 3          # N 프레임마다 탐지, 사이 프레임은 박스 보간 (GPU 면 1 권장)
+  ball_imgsz: 960    # 공 모델 추론 해상도 (중계 화면의 공은 수 픽셀이라 높게)
+
 # Tracking settings
 tracking:
-  type: "bytetrack"  # or "botsort"
+  type: "botsort"  # botsort(카메라 움직임 보정, 중계 영상 권장) | bytetrack | simple
   track_threshold: 0.3
   match_threshold: 0.8
   max_age: 30  # frames

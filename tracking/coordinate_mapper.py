@@ -314,7 +314,7 @@ class CoordinateMapper:
             pixel_y = int(center_y + point_3d.z * scale)
             
             # 점 그리기
-            color = (0, 255, 0) if det['label'] == 'player' else (0, 0, 255)
+            color = (0, 0, 255) if det['label'] == 'ball' else (0, 255, 0)
             cv2.circle(canvas, (pixel_x, pixel_y), 5, color, -1)
             
             # ID 표시
