@@ -125,3 +125,24 @@ export async function listVideos() {
   const videos = await response.json();
   return videos.map((v) => ({ ...v, url: `${API_BASE_URL}${v.url}` }));
 }
+
+async function requestJson(path, options) {
+  const response = await fetch(`${API_BASE_URL}${path}`, options);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `요청 실패 (HTTP ${response.status})`);
+  }
+  return response.json();
+}
+
+const analysisPath = (name) => `/analysis/${encodeURIComponent(name)}`;
+
+export const startAnalysis = (name) => requestJson(analysisPath(name), { method: 'POST' });
+export const getAnalysisStatus = (name) => requestJson(`${analysisPath(name)}/status`);
+export const getAnalysis = (name) => requestJson(analysisPath(name));
+export const saveCalibration = (name, keyframes) =>
+  requestJson(`${analysisPath(name)}/calibration`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keyframes }),
+  });
