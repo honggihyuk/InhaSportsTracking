@@ -217,6 +217,7 @@ tracking:
 
 - **[docs/PROJECT_OVERVIEW.md](./docs/PROJECT_OVERVIEW.md)**: 사용 기술·구현 기능·API·로드맵 상세 명세
 - **[docs/PROJECT_OVERVIEW_2_VIDEO_ANALYSIS.md](./docs/PROJECT_OVERVIEW_2_VIDEO_ANALYSIS.md)**: 영상 분석·경기장 보정·3D 트윈 연동 기술 상세와 실측 결과 (2부)
+- **[docs/PROJECT_OVERVIEW_3_VLM.md](./docs/PROJECT_OVERVIEW_3_VLM.md)**: 컴퓨터 비전 고도화(RF-DETR·SAM3·SigLIP2·GLM-OCR)와 로컬 VLM 분석 층 조사·설계 (3부)
 - **[TESTING_GUIDE.md](./TESTING_GUIDE.md)**: 테스트 및 사용 가이드
 - **[WEB_FRONTEND_GUIDE.md](./frontend/WEB_FRONTEND_GUIDE.md)**: 웹 프론트엔드 가이드
 - **[MODEL_SETUP_GUIDE.md](./MODEL_SETUP_GUIDE.md)**: 모델 설정 및 커스터마이징
