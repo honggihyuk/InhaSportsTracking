@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { OrbitControls, Text, Line } from '@react-three/drei'
+import { OrbitControls, Line } from '@react-three/drei'
 import * as THREE from 'three'
 import {
   useWebSocket, uploadVideo, listVideos, startAnalysis, cancelAnalysis, getAnalysisStatus, getAnalysis,
@@ -123,6 +123,36 @@ function FootballField() {
   )
 }
 
+// 선수 번호 라벨: 브라우저 canvas 로 그린 텍스처 (drei <Text> 는 글꼴을 외부 CDN 에서 받아
+// 오프라인·CDN 차단 환경에서 3D 화면과 UI 갱신이 멈춤 → 외부 요청이 없는 방식으로 교체)
+const labelCache = new Map()
+function labelTexture(text) {
+  let tex = labelCache.get(text)
+  if (tex) return tex
+  const canvas = document.createElement('canvas')
+  canvas.width = 128
+  canvas.height = 64
+  const draw = () => {
+    const ctx = canvas.getContext('2d')
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    ctx.font = '700 40px "Pretendard Variable", Pretendard, system-ui, sans-serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.lineWidth = 6
+    ctx.strokeStyle = '#000000'
+    ctx.strokeText(text, 64, 34)
+    ctx.fillStyle = '#F2F3F5'
+    ctx.fillText(text, 64, 34)
+  }
+  draw()
+  tex = new THREE.CanvasTexture(canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  // 서체가 아직 로드 전이면 로드 후 다시 그림
+  document.fonts?.ready.then(() => { draw(); tex.needsUpdate = true })
+  labelCache.set(text, tex)
+  return tex
+}
+
 function PlayerMarker({ player, color }) {
   return (
     <group position={toWorld(player.position_3d)}>
@@ -135,10 +165,9 @@ function PlayerMarker({ player, color }) {
         <capsuleGeometry args={[0.45, 0.9, 8, 16]} />
         <meshStandardMaterial color={color} roughness={0.35} metalness={0.1} />
       </mesh>
-      <Text position={[0, 2.35, 0]} fontSize={0.85} color="#F2F3F5" anchorX="center" anchorY="middle"
-        outlineWidth={0.04} outlineColor="#000000">
-        {player.id}
-      </Text>
+      <sprite position={[0, 2.35, 0]} scale={[1.7, 0.85, 1]}>
+        <spriteMaterial map={labelTexture(String(player.id))} transparent depthWrite={false} />
+      </sprite>
     </group>
   )
 }

@@ -107,7 +107,7 @@ flowchart LR
 | **Canvas 2D** | 브라우저 내장 | 영상 위 탐지 박스·보정점 오버레이 |
 | **`requestVideoFrameCallback`** | 브라우저 내장 | 화면에 표시된 **영상 프레임 번호**를 정확히 받아 박스·3D 를 프레임 단위로 동기화 |
 | **SVG** | 브라우저 내장 | 보정용 탑다운 경기장 도면 |
-| **Pretendard** | 1.3.9 (CDN) | 한글 UI 서체 |
+| **Pretendard** | 1.3.9 (npm 번들, 외부 CDN 없음) | 한글 UI 서체 |
 | **oxlint** | 1.83 | 린트 |
 
 ### 2.4 테스트 / 개발 도구
