@@ -145,7 +145,8 @@ def interpolate_objects(a: List[list], b: List[list], alpha: float) -> List[list
 
 def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
                   progress: Callable[[int, int], None] = lambda done, total: None,
-                  max_frames: Optional[int] = None, stride: int = 1) -> Dict:
+                  max_frames: Optional[int] = None, stride: int = 1, mode: str = 'realtime',
+                  line_store=None, postprocess: Optional[bool] = None) -> Dict:
     """
     영상 전체를 분석해 결과 dict 반환
 
@@ -155,8 +156,16 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
         progress: (처리한 프레임 수, 전체 프레임 수) 콜백
         stride: N 프레임마다 탐지하고 사이 프레임은 트랙별 박스를 선형 보간
                 (카메라 움직임은 모든 프레임에서 계산). CPU 에서는 3 정도 권장
+        mode: 'realtime' | 'precise' — 결과에 기록되며 precise 는 기본으로 오프라인 후처리를 켠다
+        line_store: pitch.LineMaskStore — 주면 프레임별 경기장 라인 마스크를 함께 만든다
+                    (보정 시 라인 정렬로 누적 오차 제거에 사용)
+        postprocess: 트랙 잇기·공백 보간·공 오탐 제거 (None 이면 precise 일 때만)
     """
+    from . import pitch as pitch_lines
+
     stride = max(1, int(stride))
+    if postprocess is None:
+        postprocess = mode == 'precise'
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise ValueError(f"영상을 열 수 없습니다: {video_path}")
@@ -204,6 +213,8 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
             else:
                 frames.append(None)  # 다음 탐지 프레임에서 보간
 
+            if line_store is not None:
+                line_store.append(*pitch_lines.line_mask(small, prev_boxes, box_scale=MOTION_SCALE))
             M = camera_motion(prev_gray, gray, prev_boxes) if prev_gray is not None else None
             motion.append(None if M is None else np.round(M, 6).ravel().tolist())
             prev_gray = gray
@@ -212,9 +223,21 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
         cap.release()
     frames = [f or [] for f in frames]  # 영상이 예상보다 일찍 끝난 경우 남은 빈칸 정리
 
+    post = None
+    if postprocess:
+        from . import postprocess as pp
+        stitched = pp.stitch_tracks(frames, motion, fps, track_colors)
+        dropped = pp.clean_ball(frames, motion, fps)
+        filled = pp.fill_gaps(frames, motion, int(round(1.5 * fps)), pp.KIND_PLAYER)
+        filled_ball = pp.fill_gaps(frames, motion, int(round(0.7 * fps)), pp.KIND_BALL)
+        post = {'stitched': len(stitched), 'ball_outliers': dropped,
+                'filled_boxes': filled, 'filled_ball': filled_ball}
+
     teams, team_colors = cluster_teams(track_colors)
     return {
-        'version': 1,
+        'version': 2,
+        'mode': mode,
+        'postprocess': post,
         'video': video_path.name,
         'fps': fps,
         'width': width,
@@ -283,14 +306,29 @@ def ground_point(x1: int, y1: int, x2: int, y2: int) -> Tuple[float, float]:
     return (x1 + x2) / 2, float(y2)
 
 
-def calibrate(result: Dict, keyframe_points: List[Dict]) -> Dict:
+def calibrate(result: Dict, keyframe_points: List[Dict], line_masks=None, smooth: Optional[bool] = None) -> Dict:
     """
     keyframe_points: [{frame: int, points: [{image: [u, v], pitch: [x, y]}, ...]}, ...]
     → result['calibration'], result['world'] 갱신
-    world[t] = [[track_id, x, y], ...] (경기장 밖 PITCH_MARGIN 이상 벗어난 객체 제외), 보정 불가 프레임은 None
+    world[t] = [[track_id, x, y, speed], ...] (경기장 밖 PITCH_MARGIN 이상 벗어난 객체 제외), 보정 불가 프레임은 None
+
+    Args:
+        line_masks: pitch.LineMaskStore (또는 t → (라인, 유효 영역) 함수). 주면 매 프레임 경기장 라인에
+                    정렬해 카메라 움직임 누적 오차를 제거한다 (정밀 분석 모드)
+        smooth: 경기장 좌표 칼만+RTS 평활화, 골키퍼 판정, 경기 지표 계산 (None 이면 정밀 모드일 때만).
+                끄면 world 는 [track_id, x, y] (속력 없음)
     """
+    from . import pitch as pitch_lines
+
+    if smooth is None:
+        smooth = result.get('mode') == 'precise'
     keyframes = {int(kf['frame']): keyframe_homography(kf['points']) for kf in keyframe_points}
-    Hs = frame_homographies(result['motion'], keyframes)
+    if line_masks is not None:
+        scale = line_masks.shape[1] / result['width'] if getattr(line_masks, 'shape', None) else MOTION_SCALE
+        Hs, quality = pitch_lines.track_homographies(result['motion'], keyframes, line_masks,
+                                                     pitch_lines.LineRefiner(scale=scale))
+    else:
+        Hs, quality = frame_homographies(result['motion'], keyframes), None
     world = []
     for objs, H in zip(result['frames'], Hs):
         if H is None:
@@ -303,8 +341,24 @@ def calibrate(result: Dict, keyframe_points: List[Dict]) -> Dict:
                 if abs(x) <= HALF_LENGTH + PITCH_MARGIN and abs(y) <= HALF_WIDTH + PITCH_MARGIN:
                     entries.append([o[0], round(float(x), 2), round(float(y), 2)])
         world.append(entries)
-    result['calibration'] = {'keyframes': keyframe_points}
+    calibration = {'keyframes': keyframe_points, 'refined': line_masks is not None}
+    if quality is not None:
+        calibration['line_fit'] = quality          # 프레임별 라인 정렬 비율 (정렬 안 됐으면 None)
+        calibration['refined_frames'] = sum(q is not None for q in quality)
+    result['calibration'] = calibration
+    result['homographies'] = [None if H is None else np.round(H / H[2, 2], 8).ravel().tolist() for H in Hs]
     result['world'] = world
+    if smooth:
+        from . import postprocess as pp
+        from analysis import stats as match_stats
+        fps = result.get('fps') or 30.0
+        result['world'] = pp.smooth_world(world, fps)
+        # 골키퍼 배정은 자동 팀 분류 원본에서 매번 다시 계산 (보정을 다시 저장해도 결과가 누적되지 않도록)
+        result.setdefault('teams_auto', dict(result.get('teams') or {}))
+        teams = dict(result['teams_auto'])
+        result['roles'] = pp.assign_goalkeepers(result['world'], teams, fps)
+        result['teams'] = teams
+        result['stats'] = match_stats.compute(result)
     return result
 
 

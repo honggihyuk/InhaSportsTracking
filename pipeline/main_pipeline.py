@@ -102,6 +102,31 @@ class Soccer3DPipeline:
             max_age=track_config.get('max_age', 30),
         )
 
+    def analysis_profile(self, mode: Optional[str] = None) -> Dict:
+        """
+        영상 분석 설정 (analysis 섹션 + 모드별 profiles 덮어쓰기)
+
+        Returns:
+            {mode, stride, img_size, ball_imgsz, ball_tile, postprocess, line_refine}
+        """
+        cfg = self.config.get('analysis', {})
+        mode = mode or cfg.get('mode', 'realtime')
+        profiles = cfg.get('profiles', {})
+        if mode not in ('realtime', 'precise'):
+            raise ValueError(f"지원하지 않는 분석 모드: {mode}")
+        det = self.config.get('detection', {})
+        base = {
+            'stride': cfg.get('stride', 1),
+            'img_size': det.get('img_size', 640),
+            'ball_imgsz': cfg.get('ball_imgsz', 1280),
+            'ball_tile': None,
+            'postprocess': mode == 'precise',
+            'line_refine': mode == 'precise',
+        }
+        base.update(profiles.get(mode) or {})
+        base['mode'] = mode
+        return base
+
     def initialize_components(self):
         """주입되지 않은 무거운 컴포넌트(탐지기, 3DGS) 초기화"""
         print("\n=== 컴포넌트 초기화 ===")
