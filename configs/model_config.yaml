@@ -41,9 +41,28 @@ detection:
     32: "sports ball"
 
 # 업로드 영상 분석 (backend /analysis)
+#   realtime: 빠른 미리보기 (탐지 간격 3, 후처리 없음)
+#   precise : 고정밀 오프라인 분석 — 매 프레임 탐지, 공 타일 추론, 트랙 잇기·보간, 경기장 라인 정렬 보정,
+#             좌표 칼만+RTS 평활화, 골키퍼 판정, 경기 지표. CPU 에서는 느리지만(수 초/프레임) 백그라운드 작업
 analysis:
-  stride: 3          # N 프레임마다 탐지, 사이 프레임은 박스 보간 (GPU 면 1 권장)
-  ball_imgsz: 960    # 공 모델 추론 해상도 (중계 화면의 공은 수 픽셀이라 높게)
+  mode: precise      # 기본 분석 모드 (API 의 ?mode= 로 영상별 선택 가능)
+  stride: 3          # 프로필에 값이 없을 때 쓰는 기본값
+  ball_imgsz: 960
+  profiles:
+    realtime:
+      stride: 3          # N 프레임마다 탐지, 사이 프레임은 박스 보간
+      img_size: 640      # 선수 모델 추론 해상도
+      ball_imgsz: 960    # 공 모델 추론 해상도 (중계 화면의 공은 수 픽셀이라 높게)
+      ball_tile: null    # 공 타일 추론 끔
+      postprocess: false
+      line_refine: false
+    precise:
+      stride: 1          # 매 프레임 탐지 (보간 없음)
+      img_size: 960      # 멀리 있는 작은 선수까지
+      ball_imgsz: 1280
+      ball_tile: 640     # 원본 해상도 640 px 타일로 공 추가 탐지 (SAHI 방식)
+      postprocess: true  # 트랙 잇기 · 공백 보간 · 공 오탐 제거
+      line_refine: true  # 경기장 라인 마스크 저장 → 보정 시 매 프레임 라인 정렬 (누적 오차 제거)
 
 # Tracking settings
 tracking:

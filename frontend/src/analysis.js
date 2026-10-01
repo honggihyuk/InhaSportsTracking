@@ -51,9 +51,10 @@ export function twinFrame(analysis, f) {
   const dt = SPEED_WINDOW / (analysis.fps || 30)
   const players = []
   let ball = null
-  for (const [id, x, y] of world) {
+  for (const [id, x, y, smoothed] of world) {
+    // 정밀 모드는 칼만+RTS 평활 속력을 함께 저장 → 그대로 사용, 없으면 0.2 초 차분
     const p = prev.get(id)
-    const speed = p ? Math.hypot(x - p[0], y - p[1]) / dt : 0
+    const speed = smoothed ?? (p ? Math.hypot(x - p[0], y - p[1]) / dt : 0)
     if (id === BALL_ID) {
       ball = { position_3d: [x, y, 0], velocity: speed }
     } else {
@@ -80,4 +81,64 @@ export function inkOn(hex) {
   const n = parseInt(hex.slice(1), 16)
   const lum = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255
   return lum > 0.6 ? '#0A0B0D' : '#F2F3F5'
+}
+
+/* ---------- 보정 확인용 경기장 라인 (pipeline/pitch.py 의 pitch_polylines 와 같은 모델) ---------- */
+const arc = (cx, cy, r, a0, a1, n = 48) => Array.from({ length: n }, (_, i) => {
+  const t = ((a0 + ((a1 - a0) * i) / (n - 1)) * Math.PI) / 180
+  return [cx + r * Math.cos(t), cy + r * Math.sin(t)]
+})
+
+export const PITCH_POLYLINES = (() => {
+  const lines = [
+    [[-L, W], [L, W]], [[-L, -W], [L, -W]], [[-L, -W], [-L, W]], [[L, -W], [L, W]],
+    [[0, -W], [0, W]], arc(0, 0, 9.15, 0, 360, 96),
+  ]
+  const half = (Math.acos((16.5 - 11) / 9.15) * 180) / Math.PI
+  for (const s of [-1, 1]) {
+    const gx = s * L, pb = s * (L - 16.5), ga = s * (L - 5.5)
+    lines.push(
+      [[gx, PB], [pb, PB], [pb, -PB], [gx, -PB]],
+      [[gx, GA], [ga, GA], [ga, -GA], [gx, -GA]],
+      arc(s * (L - 11), 0, 9.15, (s < 0 ? 0 : 180) - half, (s < 0 ? 0 : 180) + half, 32),
+    )
+  }
+  // 직선은 원근 투영 후에도 직선이지만, 화면 밖으로 나가는 구간을 자연스럽게 자르도록 잘게 나눔
+  return lines.map((pl) => pl.flatMap((p, i) => {
+    if (i === 0) return [p]
+    const q = pl[i - 1]
+    const n = Math.max(1, Math.ceil(Math.hypot(p[0] - q[0], p[1] - q[1]) / 2))
+    return Array.from({ length: n }, (_, k) => [q[0] + ((p[0] - q[0]) * (k + 1)) / n, q[1] + ((p[1] - q[1]) * (k + 1)) / n])
+  }))
+})()
+
+export function invert3(m) {
+  const [a, b, c, d, e, f, g, h, i] = m
+  const A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g
+  const det = a * A + b * B + c * C
+  if (Math.abs(det) < 1e-15) return null
+  return [A, -(b * i - c * h), b * f - c * e, B, a * i - c * g, -(a * f - c * d), C, -(a * h - b * g), a * e - b * d]
+    .map((v) => v / det)
+}
+
+/** 프레임 f 의 이미지→경기장 호모그래피로 경기장 라인을 원본 픽셀 좌표 폴리라인으로 (카메라 뒤쪽 점에서 끊음) */
+export function projectedPitchLines(analysis, f) {
+  const H = analysis?.homographies?.[f]
+  const G = H && invert3(H)
+  if (!G) return []
+  const out = []
+  for (const pl of PITCH_POLYLINES) {
+    let cur = []
+    for (const [x, y] of pl) {
+      const w = G[6] * x + G[7] * y + G[8]
+      if (w <= 1e-6) {
+        if (cur.length > 1) out.push(cur)
+        cur = []
+        continue
+      }
+      cur.push([(G[0] * x + G[1] * y + G[2]) / w, (G[3] * x + G[4] * y + G[5]) / w])
+    }
+    if (cur.length > 1) out.push(cur)
+  }
+  return out
 }

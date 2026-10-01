@@ -198,6 +198,7 @@ class CalibrationKeyframe(BaseModel):
 
 class CalibrationRequest(BaseModel):
     keyframes: List[CalibrationKeyframe]
+    refine: Optional[bool] = None  # 경기장 라인 정렬 (None: 정밀 모드 라인 마스크가 있으면 사용)
 
 
 def _video_file(name: str) -> Path:
@@ -228,22 +229,54 @@ def _get_pipeline():
     return pipeline
 
 
-def _run_analysis(name: str):
+def _lines_file(name: str) -> Path:
+    """정밀 모드에서 저장하는 프레임별 경기장 라인 마스크 (보정 시 라인 정렬에 사용)"""
+    return ANALYSIS_DIR / f"{Path(name).name}.lines.npz"
+
+
+class AnalysisCancelled(Exception):
+    pass
+
+
+def _run_analysis(name: str, mode: Optional[str] = None):
     from pipeline import video_analysis
+    from pipeline.pitch import LineMaskStore
     from tracking.tracker import BallTracker
 
     job = analysis_jobs[name]
+    if job.get("cancel"):
+        return
+
+    def progress(done, total):
+        if job.get("cancel"):
+            raise AnalysisCancelled()
+        job.update(progress=done / max(total, 1))
+
     try:
         job["state"] = "running"
         p = _get_pipeline()
-        stride = int(p.config.get("analysis", {}).get("stride", 1))
+        profile = p.analysis_profile(mode) if hasattr(p, "analysis_profile") else {
+            "mode": mode or "realtime", "stride": int(p.config.get("analysis", {}).get("stride", 1))}
+        job["mode"] = profile["mode"]
+        stride = int(profile.get("stride", 1))
+        det = p.detector
+        for attr, key in (("imgsz", "img_size"), ("ball_imgsz", "ball_imgsz"), ("ball_tile", "ball_tile")):
+            if key in profile and hasattr(det, attr):
+                setattr(det, attr, profile[key])  # 탐지 모델은 재사용하고 추론 설정만 모드별로 바꿈
         tracker = p.make_tracker()  # 영상마다 추적 ID 를 새로 시작
         tracker.ball_tracker = BallTracker(max_jump=60 * stride)  # 탐지 간격만큼 공 이동 허용 범위 확대
+        lines = LineMaskStore((0, 0)) if profile.get("line_refine") else None
         result = video_analysis.analyze_video(
-            _video_file(name), p.detector, tracker, stride=stride,
-            progress=lambda done, total: job.update(progress=done / max(total, 1)))
+            _video_file(name), det, tracker, stride=stride, mode=profile["mode"],
+            line_store=lines, postprocess=profile.get("postprocess"), progress=progress)
+        _lines_file(name).unlink(missing_ok=True)
+        if lines is not None and len(lines):
+            ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
+            lines.save(_lines_file(name))
         video_analysis.save(result, _analysis_file(name))
         job.update(state="done", progress=1.0)
+    except AnalysisCancelled:
+        job.update(state="cancelled")
     except Exception as e:  # 작업 스레드 예외는 상태로 전달
         print(f"분석 실패 ({name}): {e}")
         job.update(state="error", error=str(e))
@@ -252,24 +285,45 @@ def _run_analysis(name: str):
 def _analysis_status(name: str) -> Dict:
     job = analysis_jobs.get(name)
     if job and job["state"] in ("queued", "running", "error"):
-        return {"name": name, **job}
+        return {"name": name, **{k: v for k, v in job.items() if k != "cancel"}}
     path = _analysis_file(name)
     if path.is_file():
         from pipeline import video_analysis
-        calibrated = video_analysis.load(path).get("calibration") is not None
-        return {"name": name, "state": "done", "progress": 1.0, "calibrated": calibrated}
+        result = video_analysis.load(path)
+        return {"name": name, "state": "done", "progress": 1.0,
+                "calibrated": result.get("calibration") is not None,
+                "mode": result.get("mode", "realtime"),
+                "line_refine": _lines_file(name).is_file(),
+                "has_stats": result.get("stats") is not None}
+    if job and job["state"] == "cancelled":
+        return {"name": name, "state": "cancelled", "progress": job.get("progress", 0.0)}
     return {"name": name, "state": "none", "progress": 0.0}
 
 
 @app.post("/analysis/{name}")
-def start_analysis(name: str):
-    """영상 분석 시작 (백그라운드). 이미 진행 중이면 409"""
+def start_analysis(name: str, mode: Optional[str] = None):
+    """영상 분석 시작 (백그라운드). mode: realtime | precise (생략 시 설정 기본값). 이미 진행 중이면 409"""
     _video_file(name)
+    if mode is not None and mode not in ("realtime", "precise"):
+        raise HTTPException(status_code=400, detail="mode 는 realtime 또는 precise 입니다.")
     if analysis_jobs.get(name, {}).get("state") in ("queued", "running"):
         raise HTTPException(status_code=409, detail="이미 분석 중입니다.")
-    analysis_jobs[name] = {"state": "queued", "progress": 0.0}
-    analysis_executor.submit(_run_analysis, name)
+    analysis_jobs[name] = {"state": "queued", "progress": 0.0, "mode": mode}
+    analysis_executor.submit(_run_analysis, name, mode)
     return _analysis_status(name)
+
+
+@app.delete("/analysis/{name}")
+def cancel_analysis(name: str):
+    """진행 중(대기 포함)인 분석 취소 — 다음 프레임 처리 시점에 멈춤. 기존 결과 파일은 유지"""
+    _video_file(name)
+    job = analysis_jobs.get(name)
+    if not job or job["state"] not in ("queued", "running"):
+        raise HTTPException(status_code=409, detail="진행 중인 분석이 없습니다.")
+    job["cancel"] = True
+    if job["state"] == "queued":
+        job["state"] = "cancelled"
+    return {"name": name, "state": "cancelling" if job["state"] == "running" else "cancelled"}
 
 
 @app.get("/analysis/{name}/status")
@@ -301,13 +355,33 @@ def save_calibration(name: str, body: CalibrationRequest):
         if any(len(p.image) != 2 or len(p.pitch) != 2 for p in kf.points):
             raise HTTPException(status_code=400, detail="보정점 좌표는 [x, y] 형식이어야 합니다.")
     result = video_analysis.load(path)
+    lines = None
+    if body.refine is not False and _lines_file(name).is_file():
+        from pipeline.pitch import LineMaskStore
+        lines = LineMaskStore.load(_lines_file(name))  # 정밀 모드: 매 프레임 경기장 라인 정렬
     try:
-        video_analysis.calibrate(result, [kf.model_dump() for kf in body.keyframes])
+        video_analysis.calibrate(result, [kf.model_dump() for kf in body.keyframes], line_masks=lines)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     video_analysis.save(result, path)
     covered = sum(w is not None for w in result["world"])
-    return {"name": name, "calibrated_frames": covered, "frame_count": result["frame_count"]}
+    return {"name": name, "calibrated_frames": covered, "frame_count": result["frame_count"],
+            "refined_frames": result["calibration"].get("refined_frames"),
+            "has_stats": result.get("stats") is not None}
+
+
+@app.get("/analysis/{name}/stats")
+def get_stats(name: str):
+    """경기 지표 (선수별 거리·속력·스프린트, 점유율, 패스·턴오버, 팀 대형, 히트맵) — 정밀 모드 보정 후 생성"""
+    from pipeline import video_analysis
+
+    path = _analysis_file(name)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="분석 결과가 없습니다.")
+    stats = video_analysis.load(path).get("stats")
+    if stats is None:
+        raise HTTPException(status_code=404, detail="경기 지표가 없습니다. 경기장 보정을 먼저 저장하세요.")
+    return stats
 
 
 @app.get("/process_frame/{frame_number}")

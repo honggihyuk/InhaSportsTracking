@@ -57,6 +57,28 @@ def _coco_class_ids(model, name: str) -> Optional[List[int]]:
     return [i for i, n in names.items() if n == name]
 
 
+def tiles(width: int, height: int, tile: int, overlap: float = 0.2) -> List[Tuple[int, int, int]]:
+    """화면을 덮는 겹치는 정사각 타일 (x0, y0, 크기). 마지막 타일은 화면 끝에 맞춘다"""
+    tile = int(min(tile, width, height))
+    step = max(1, int(tile * (1 - overlap)))
+    xs = list(range(0, max(width - tile, 0) + 1, step))
+    ys = list(range(0, max(height - tile, 0) + 1, step))
+    if xs[-1] + tile < width:
+        xs.append(width - tile)
+    if ys[-1] + tile < height:
+        ys.append(height - tile)
+    return [(x, y, tile) for y in ys for x in xs]
+
+
+def merge_detections(dets: List[Detection], iou: float = 0.45) -> List[Detection]:
+    """타일 경계·전체 화면 추론에서 중복된 박스를 NMS 로 하나만 남김"""
+    if len(dets) < 2:
+        return dets
+    boxes = [[d.bbox[0], d.bbox[1], d.bbox[2] - d.bbox[0], d.bbox[3] - d.bbox[1]] for d in dets]
+    keep = cv2.dnn.NMSBoxes(boxes, [d.confidence for d in dets], 0.0, iou)
+    return [dets[i] for i in np.array(keep).ravel()]
+
+
 def _yolo(path: str):
     # ultralytics(torch) 는 무거우므로 실제 모델을 만들 때만 import
     from ultralytics import YOLO
@@ -68,6 +90,8 @@ class RoboflowSoccerDetector:
 
     BALL_OFFSET = BALL_OFFSET
     FIELD_OFFSET = FIELD_OFFSET
+    ball_tile: Optional[int] = None   # 공 타일 추론 크기 (None 이면 끔)
+    tile_overlap: float = 0.2
 
     def __init__(
         self,
@@ -78,7 +102,9 @@ class RoboflowSoccerDetector:
         iou_threshold: float = 0.45,
         device: str = "cpu",  # 'cuda' 또는 'cpu'
         imgsz: int = 640,
-        ball_imgsz: int = 1280
+        ball_imgsz: int = 1280,
+        ball_tile: Optional[int] = None,
+        tile_overlap: float = 0.2
     ):
         """
         Args:
@@ -90,12 +116,17 @@ class RoboflowSoccerDetector:
             device: 디바이스 ('cuda', 'cpu', 'mps')
             imgsz: 선수/필드 모델 추론 해상도
             ball_imgsz: 공 모델 추론 해상도 (중계 화면의 공은 수 픽셀이라 더 높게)
+            ball_tile: 공 타일 추론 크기(px, 원본 해상도). 지정하면 전체 화면 추론에 더해
+                       겹치는 타일을 원본 해상도로 추론해 작은 공을 찾는다 (SAHI 방식, 정밀 모드)
+            tile_overlap: 타일 겹침 비율 (경계에 걸친 공을 놓치지 않도록)
         """
         self.confidence_threshold = confidence_threshold
         self.iou_threshold = iou_threshold
         self.device = device
         self.imgsz = imgsz
         self.ball_imgsz = ball_imgsz
+        self.ball_tile = ball_tile
+        self.tile_overlap = tile_overlap
         
         # 모델 경로 설정
         base_path = Path("data/roboflow_datasets")
@@ -209,8 +240,11 @@ class RoboflowSoccerDetector:
             detections += self._predict(frame, self.players_model, 0, 'player',
                                         self.player_classes, self.imgsz)
         if detect_ball:
-            detections += self._predict(frame, self.ball_model, self.BALL_OFFSET, 'ball',
-                                        self.ball_classes, self.ball_imgsz)
+            balls = self._predict(frame, self.ball_model, self.BALL_OFFSET, 'ball',
+                                  self.ball_classes, self.ball_imgsz)
+            if self.ball_tile:
+                balls = merge_detections(balls + self._predict_tiled(frame), self.iou_threshold)
+            detections += balls
         if detect_field and self.field_model:
             detections += self._predict(frame, self.field_model, self.FIELD_OFFSET, 'field',
                                         None, self.imgsz)
@@ -244,6 +278,17 @@ class RoboflowSoccerDetector:
                     type=det_type
                 ))
         return detections
+
+    def _predict_tiled(self, frame: np.ndarray) -> List[Detection]:
+        """겹치는 타일마다 공 모델을 원본 해상도로 추론 → 프레임 좌표로 되돌림"""
+        out = []
+        for x0, y0, tile in tiles(frame.shape[1], frame.shape[0], self.ball_tile, self.tile_overlap):
+            crop = frame[y0:y0 + tile, x0:x0 + tile]
+            for d in self._predict(crop, self.ball_model, self.BALL_OFFSET, 'ball', self.ball_classes, tile):
+                x1, y1, x2, y2 = d.bbox
+                d.bbox = (x1 + x0, y1 + y0, x2 + x0, y2 + y0)
+                out.append(d)
+        return out
 
     def detect_frame(self, frame: np.ndarray) -> List[Detection]:
         """간소화된 탐지 메서드 (선수 + 공)"""

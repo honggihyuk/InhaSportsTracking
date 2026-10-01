@@ -4,7 +4,7 @@
 >
 > 이 문서는 **현재 코드 기준**으로 사용 기술, 구현된 기능, 알려진 제약, 향후 구현 계획을 정리합니다. 빠른 실행 방법은 [README](../README.md)를 참고하세요.
 >
-> **다음 문서**: [기술 및 기능 명세 (2부) — 영상 분석 · 경기장 보정 · 3D 트윈 연동](./PROJECT_OVERVIEW_2_VIDEO_ANALYSIS.md)
+> **다음 문서**: [2부 — 영상 분석 · 경기장 보정 · 3D 트윈 연동](./PROJECT_OVERVIEW_2_VIDEO_ANALYSIS.md) · [3부 — CV 고도화 · VLM 설계](./PROJECT_OVERVIEW_3_VLM.md) · [4부 — 고정밀 분석 모드](./PROJECT_OVERVIEW_4_PRECISE_ANALYSIS.md)
 
 ---
 
@@ -107,7 +107,7 @@ flowchart LR
 | **Canvas 2D** | 브라우저 내장 | 영상 위 탐지 박스·보정점 오버레이 |
 | **`requestVideoFrameCallback`** | 브라우저 내장 | 화면에 표시된 **영상 프레임 번호**를 정확히 받아 박스·3D 를 프레임 단위로 동기화 |
 | **SVG** | 브라우저 내장 | 보정용 탑다운 경기장 도면 |
-| **Pretendard** | 1.3.9 (CDN) | 한글 UI 서체 |
+| **Pretendard** | 1.3.9 (npm 번들, 외부 CDN 없음) | 한글 UI 서체 |
 | **oxlint** | 1.83 | 린트 |
 
 ### 2.4 테스트 / 개발 도구
@@ -296,7 +296,8 @@ YOLO·GPU 없이 실행되는 35 개 테스트입니다.
 | 팀 자동 분류 (유니폼 색) | 완료 | 골키퍼는 대개 `other` |
 | 카메라 움직임 추정 · 보정 전파 | 완료 | |
 | **분석 결과 → 3D 트윈 연동** | **완료** | **수동 경기장 보정 필요** |
-| 자동 경기장 보정 | 미구현 | [6.1](#61-1단계--정확도와-자동화) |
+| **고정밀 분석 모드** | **완료** | 라인 정렬 보정·트랙 잇기·좌표 평활화·경기 지표 — [4부](./PROJECT_OVERVIEW_4_PRECISE_ANALYSIS.md) |
+| 자동 경기장 보정 | 부분 | 키프레임 이후 매 프레임 라인 자동 정렬 완료, 첫 키프레임은 수동 ([4부 36절](./PROJECT_OVERVIEW_4_PRECISE_ANALYSIS.md#36-한계와-다음-단계)) |
 | 3D Gaussian Splatting 렌더링 | 부분 | 모듈만 존재, `render()` 미구현 |
 
 ---
