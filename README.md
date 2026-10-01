@@ -27,6 +27,7 @@
 3. **경기장 보정**: 한 프레임에서 경기장 기준점 4 개 이상을 지정하면 카메라 팬·줌을 따라 전 프레임에 전파
 4. **3D 디지털 트윈 연동**: 분석·보정된 선수·공 위치를 영상과 같은 프레임으로 3D 재현 (자유 시점 / 탑다운 / 선수 시점)
 5. **통계**: 팀별 선수 수·평균/최고 속도, 볼 소유, 공 속도·위치
+6. **고정밀 분석 모드 (기본)**: 매 프레임 탐지 + 공 타일 탐지, 끊긴 트랙 잇기·가려진 구간 보간, **경기장 라인 정렬로 보정 누적 오차 제거**, 좌표 칼만+RTS 평활화, 골키퍼 판정, 경기 지표(거리·스프린트·점유율·패스·대형·히트맵) — [4부 문서](./docs/PROJECT_OVERVIEW_4_PRECISE_ANALYSIS.md)
 
 ---
 
@@ -91,11 +92,12 @@ npm run dev
 브라우저에서 `http://localhost:5173` 에 접속합니다.
 
 1. 라이브러리에서 **업로드**로 경기 영상을 올리고 선택합니다.
-2. **영상 분석** 카드에서 **분석 시작** — 완료되면 영상 위에 탐지 박스가 표시됩니다.
+2. **영상 분석** 카드에서 모드(**고정밀** / 빠른 미리보기)를 고르고 **분석 시작** — 완료되면 영상 위에 탐지 박스가 표시됩니다. 진행 중에는 **분석 취소** 가능.
 3. **경기장 보정** — 오른쪽 도면에서 기준점(코너, 페널티박스 모서리, 센터서클과 하프라인 교점 등)을 선택하고 영상에서 같은 지점을 클릭합니다. 한 직선 위에 있지 않은 4 점 이상이면 저장할 수 있습니다.
 4. 3D 트윈이 분석 데이터로 전환되어 영상과 함께 재생됩니다. 장면 전환 이후 구간은 그 구간에서 보정을 추가하세요.
+5. 고정밀 모드는 보정을 저장할 때 매 프레임 경기장 라인에 다시 맞추고, **경기 지표** 카드(점유율·거리·스프린트·패스, 이벤트 클릭 시 해당 장면으로 이동)를 만듭니다. **보정된 경기장 라인 표시**를 켜면 영상 위에 투영된 라인으로 보정 정확도를 눈으로 확인할 수 있습니다.
 
-> CPU 에서는 분석이 영상 길이의 수십 배 걸립니다 (5 코어 기준 약 1 초/프레임). GPU 가 있으면 `detection.device: cuda`, `analysis.stride: 1` 을 권장합니다.
+> CPU 에서는 분석이 영상 길이의 수십 배 걸립니다 (빠른 미리보기 약 1 초/프레임, 고정밀은 그 이상). GPU 가 있으면 `detection.device: cuda` 를 권장합니다.
 
 > 브라우저가 재생할 수 있는 **H.264(MP4)** 또는 **VP9/AV1(WebM)** 영상을 사용하세요. 다른 코덱은 다음과 같이 변환합니다.
 >
@@ -122,6 +124,11 @@ python -m pytest tests -q
 ```
 
 YOLO·GPU 없이 합성 영상과 가짜 탐지기로 실행됩니다.
+
+```bash
+# 실시간 vs 고정밀 모드 정량 비교 (정답이 있는 합성 중계 영상)
+python scripts/benchmark_precise.py --frames 300
+```
 
 ---
 
@@ -164,8 +171,10 @@ detection:
   device: "cpu"                # cpu 또는 cuda
 
 analysis:
-  stride: 3                    # N 프레임마다 탐지, 사이는 보간 (GPU 면 1)
-  ball_imgsz: 960              # 공 모델 추론 해상도
+  mode: precise                # 기본 분석 모드 (API ?mode=realtime|precise 로 영상별 선택)
+  profiles:
+    realtime: {stride: 3, img_size: 640, ball_imgsz: 960, ball_tile: null, postprocess: false, line_refine: false}
+    precise:  {stride: 1, img_size: 960, ball_imgsz: 1280, ball_tile: 640, postprocess: true, line_refine: true}
 
 tracking:
   type: "botsort"              # botsort(카메라 움직임 보정, 권장) | bytetrack | simple
@@ -218,6 +227,7 @@ tracking:
 - **[docs/PROJECT_OVERVIEW.md](./docs/PROJECT_OVERVIEW.md)**: 사용 기술·구현 기능·API·로드맵 상세 명세
 - **[docs/PROJECT_OVERVIEW_2_VIDEO_ANALYSIS.md](./docs/PROJECT_OVERVIEW_2_VIDEO_ANALYSIS.md)**: 영상 분석·경기장 보정·3D 트윈 연동 기술 상세와 실측 결과 (2부)
 - **[docs/PROJECT_OVERVIEW_3_VLM.md](./docs/PROJECT_OVERVIEW_3_VLM.md)**: 컴퓨터 비전 고도화(RF-DETR·SAM3·SigLIP2·GLM-OCR)와 로컬 VLM 분석 층 조사·설계 (3부)
+- **[docs/PROJECT_OVERVIEW_4_PRECISE_ANALYSIS.md](./docs/PROJECT_OVERVIEW_4_PRECISE_ANALYSIS.md)**: 고정밀 분석 모드 — 라인 정렬 보정·오프라인 후처리·경기 지표 구현과 정량 비교 (4부)
 - **[TESTING_GUIDE.md](./TESTING_GUIDE.md)**: 테스트 및 사용 가이드
 - **[WEB_FRONTEND_GUIDE.md](./frontend/WEB_FRONTEND_GUIDE.md)**: 웹 프론트엔드 가이드
 - **[MODEL_SETUP_GUIDE.md](./MODEL_SETUP_GUIDE.md)**: 모델 설정 및 커스터마이징
@@ -231,10 +241,12 @@ tracking:
 - ✅ 업로드 영상 분석 작업 · 탐지 박스 오버레이 · 팀 자동 분류
 - ✅ 경기장 보정 (키프레임 + 카메라 움직임 전파) → 3D 트윈 연동
 - ✅ FastAPI 백엔드 · 영상 업로드/제공 · Web 프론트엔드
-- ✅ 단위·통합 테스트
+- ✅ 고정밀 분석 모드 — 경기장 라인 정렬 보정, 트랙 잇기·보간, 좌표 평활화, 골키퍼 판정
+- ✅ 경기 지표 — 이동 거리·스프린트·점유율·패스/턴오버·팀 대형·히트맵 (`/analysis/{영상}/stats`)
+- ✅ 단위·통합 테스트 (55 개)
 - 🔶 3D Gaussian Splatting — 표준 공간·변형 MLP 모듈만 구현, 렌더링 미연동
-- ⏳ 자동 경기장 보정 · 공 전용 탐지 모델 · GPU 추론
-- ⏳ 히트맵 · 패스 네트워크 등 전술 분석 도구
+- ⏳ 자동 경기장 보정(초기 키프레임 자동 검출) · 공 전용 탐지 모델 · GPU 추론
+- ⏳ 히트맵·패스 네트워크 화면 표시 (데이터는 생성됨) · VLM 질의 층
 - ⏳ SMPL 포즈 복원
 
 자세한 로드맵은 [향후 구현 계획](./docs/PROJECT_OVERVIEW.md#6-향후-구현-계획)을 참고하세요.

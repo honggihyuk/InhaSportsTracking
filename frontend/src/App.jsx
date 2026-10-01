@@ -3,7 +3,8 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { OrbitControls, Text, Line } from '@react-three/drei'
 import * as THREE from 'three'
 import {
-  useWebSocket, uploadVideo, listVideos, startAnalysis, getAnalysisStatus, getAnalysis, saveCalibration,
+  useWebSocket, uploadVideo, listVideos, startAnalysis, cancelAnalysis, getAnalysisStatus, getAnalysis,
+  saveCalibration,
 } from './components/api'
 import { VideoOverlay } from './components/VideoOverlay'
 import { CalibrationPanel } from './components/CalibrationPanel'
@@ -247,27 +248,34 @@ function CompareRow({ label, home, away, format = (v) => v }) {
 }
 
 /* ---------- 영상 분석 카드 ---------- */
-function AnalysisCard({ status, summary, showBoxes, onToggleBoxes, onStart, onCalibrate }) {
+const MODES = [
+  ['precise', '고정밀', '매 프레임 탐지 · 공 타일 탐지 · 트랙 잇기 · 경기장 라인 정렬 보정 · 좌표 평활화 · 경기 지표. CPU 에서는 프레임당 수 초가 걸립니다.'],
+  ['realtime', '빠른 미리보기', '3 프레임마다 탐지하고 사이를 보간합니다. 후처리·라인 정렬·경기 지표는 없습니다.'],
+]
+const STATE_LABEL = { none: '분석 전', queued: '대기 중', done: '완료', error: '오류', cancelled: '취소됨' }
+
+function AnalysisCard({ status, summary, mode, onMode, showBoxes, onToggleBoxes, showLines, onToggleLines,
+  onStart, onCancel, onCalibrate }) {
   const state = status?.state ?? 'none'
   const pct = Math.round((status?.progress ?? 0) * 100)
+  const doneMode = status?.mode ?? summary?.mode
   return (
     <section className="card analysis-card">
       <div className="card-head">
         <div className="eyebrow">영상 분석</div>
         <span className={`tag tag-${state}`}>
-          {{ none: '분석 전', queued: '대기 중', running: `분석 중 ${pct}%`, done: '완료', error: '오류' }[state]}
+          {state === 'running' ? `분석 중 ${pct}%` : STATE_LABEL[state]}
+          {state === 'done' && doneMode && ` · ${doneMode === 'precise' ? '고정밀' : '미리보기'}`}
         </span>
       </div>
 
-      {(state === 'none' || state === 'error') && (
+      {(state === 'none' || state === 'error' || state === 'cancelled') && (
         <>
-          <p className="card-text">
-            {state === 'error'
-              ? status.error
-              : '선수·공 탐지와 추적, 카메라 움직임을 분석해 영상 위 박스와 3D 트윈에 연동합니다. CPU 에서는 영상 길이의 수십 배가 걸릴 수 있습니다.'}
-          </p>
+          <Segmented label="분석 모드" value={mode} onChange={onMode}
+            options={MODES.map(([key, text]) => [key, text])} />
+          <p className="card-text">{state === 'error' ? status.error : MODES.find(([k]) => k === mode)[2]}</p>
           <button className="btn btn-primary btn-block" onClick={onStart}>
-            <Icon name="scan" size={16} />{state === 'error' ? '다시 분석' : '분석 시작'}
+            <Icon name="scan" size={16} />{state === 'none' ? '분석 시작' : '다시 분석'}
           </button>
         </>
       )}
@@ -275,7 +283,10 @@ function AnalysisCard({ status, summary, showBoxes, onToggleBoxes, onStart, onCa
       {(state === 'queued' || state === 'running') && (
         <>
           <div className="progress"><span style={{ width: `${pct}%` }} /></div>
-          <p className="card-text muted">분석이 끝나면 자동으로 불러옵니다. 다른 화면을 봐도 계속 진행됩니다.</p>
+          <p className="card-text muted">
+            {status?.mode === 'precise' ? '고정밀 분석 중입니다. ' : ''}분석이 끝나면 자동으로 불러옵니다. 다른 화면을 봐도 계속 진행됩니다.
+          </p>
+          <button className="btn btn-ghost btn-block" onClick={onCancel}>분석 취소</button>
         </>
       )}
 
@@ -285,16 +296,90 @@ function AnalysisCard({ status, summary, showBoxes, onToggleBoxes, onStart, onCa
           <div className="kv"><span>팀 분류</span><strong className="num">
             {summary.home} · {summary.away}<small> (기타 {summary.other})</small></strong></div>
           <div className="kv"><span>공 검출</span><strong className="num">{summary.ballPct}<small> % 프레임</small></strong></div>
+          {summary.post && (
+            <div className="kv"><span>후처리</span><strong className="num">
+              잇기 {summary.post.stitched}<small> · 보간 {summary.post.filled_boxes + summary.post.filled_ball}</small></strong></div>
+          )}
           <div className="kv"><span>경기장 보정</span><strong className={summary.calibratedPct ? '' : 'warn'}>
             {summary.calibratedPct ? <span className="num">{summary.calibratedPct}<small> % 프레임</small></span> : '필요'}</strong></div>
+          {summary.refinedPct != null && (
+            <div className="kv"><span>라인 정렬</span><strong className="num">{summary.refinedPct}<small> % 프레임</small></strong></div>
+          )}
           <label className="switch">
             <input type="checkbox" checked={showBoxes} onChange={onToggleBoxes} />
             <span>영상에 탐지 박스 표시</span>
           </label>
+          {summary.calibratedPct > 0 && (
+            <label className="switch">
+              <input type="checkbox" checked={showLines} onChange={onToggleLines} />
+              <span>보정된 경기장 라인 표시</span>
+            </label>
+          )}
           <button className="btn btn-ghost btn-block" onClick={onCalibrate}>
             <Icon name="target" size={15} />{summary.calibratedPct ? '현재 프레임 보정 추가' : '경기장 보정'}
           </button>
+          {doneMode !== 'precise' && (
+            <button className="btn btn-ghost btn-block" onClick={() => onStart('precise')}>
+              <Icon name="scan" size={15} />고정밀 모드로 재분석
+            </button>
+          )}
         </>
+      )}
+    </section>
+  )
+}
+
+/* ---------- 경기 지표 카드 (고정밀 모드 + 보정 후) ---------- */
+const EVENT_LABEL = { pass: '패스', turnover: '턴오버', sprint: '스프린트' }
+
+function MatchStatsCard({ stats, fps, teamColors, onSeek, currentFrame }) {
+  const [tab, setTab] = useState('players')
+  const players = Object.entries(stats.players)
+    .filter(([, p]) => p.team !== 'other' && p.seconds >= 1)
+    .sort((a, b) => b[1].distance - a[1].distance)
+  const { home, away } = stats.teams
+  const t = (f) => formatTime(f / fps)
+  return (
+    <section className="card stats-card" style={{ '--home': teamColors.home, '--away': teamColors.away }}>
+      <div className="card-head">
+        <div className="eyebrow">경기 지표</div>
+        <span className="tag tag-done">고정밀</span>
+      </div>
+      <CompareRow label="점유율 %" home={home.possession * 100} away={away.possession * 100} format={(v) => v.toFixed(0)} />
+      <CompareRow label="이동 거리 m" home={home.distance} away={away.distance} format={(v) => v.toFixed(0)} />
+      <CompareRow label="스프린트" home={home.sprints} away={away.sprints} />
+      <CompareRow label="패스" home={home.passes} away={away.passes} />
+      <Segmented label="지표 보기" value={tab} onChange={setTab} options={[['players', '선수'], ['events', '이벤트']]} />
+      {tab === 'players' ? (
+        <table className="stats-table num">
+          <thead><tr><th>ID</th><th>거리 m</th><th>최고 m/s</th><th>스프린트</th></tr></thead>
+          <tbody>
+            {players.slice(0, 12).map(([id, p]) => (
+              <tr key={id}>
+                <td><span className="team-dot" style={{ background: teamColors[p.team] }} />#{id}
+                  {p.role === 'goalkeeper' && <small> GK</small>}</td>
+                <td>{p.distance.toFixed(0)}</td><td>{p.max_speed.toFixed(1)}</td><td>{p.sprints.length}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <ul className="event-list">
+          {stats.events.length === 0 && <li className="muted small">감지된 이벤트가 없습니다.</li>}
+          {stats.events.slice(0, 60).map((e, i) => (
+            <li key={i}>
+              <button className={currentFrame >= e.frame && currentFrame <= (e.end_frame ?? e.frame) ? 'active' : ''}
+                onClick={() => onSeek(e.frame / fps)}>
+                <span className="num muted">{t(e.frame)}</span>
+                <span className="team-dot" style={{ background: teamColors[e.team] ?? teamColors.other }} />
+                <span>{EVENT_LABEL[e.type]}</span>
+                <span className="num muted">
+                  {e.type === 'sprint' ? `#${e.player} ${e.max_speed.toFixed(1)} m/s` : `#${e.from} → #${e.to}`}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   )
@@ -317,6 +402,10 @@ function summarize(data) {
     other: count('other'),
     ballPct: Math.round((ballFrames / n) * 100),
     calibratedPct: data.world ? Math.round((data.world.filter(Boolean).length / n) * 100) : 0,
+    refinedPct: data.calibration?.refined_frames != null
+      ? Math.round((data.calibration.refined_frames / n) * 100) : null,
+    mode: data.mode ?? 'realtime',
+    post: data.postprocess ?? null,
   }
 }
 
@@ -334,6 +423,8 @@ function App() {
   const [videoFrame, setVideoFrame] = useState(0) // 화면에 표시 중인 영상 프레임 번호
   const [analysis, setAnalysis] = useState({ status: null, data: null })
   const [showBoxes, setShowBoxes] = useState(true)
+  const [showLines, setShowLines] = useState(false)
+  const [runMode, setRunMode] = useState('precise') // 분석 시작 시 선택한 모드
   const [calib, setCalib] = useState(null) // 보정 모드 {frame, points, activeId, saving, error}
   const [upload, setUpload] = useState(null)
   const videoRef = useRef(null)
@@ -512,13 +603,20 @@ function App() {
     }
   }
 
-  const handleStartAnalysis = async () => {
+  const handleStartAnalysis = async (mode = runMode) => {
     try {
-      const status = await startAnalysis(source.name)
+      const status = await startAnalysis(source.name, mode)
       setAnalysis((a) => ({ ...a, status }))
     } catch (err) {
       setAnalysis((a) => ({ ...a, status: { state: 'error', error: err.message } }))
     }
+  }
+
+  const handleCancelAnalysis = async () => {
+    try {
+      await cancelAnalysis(source.name)
+      setAnalysis((a) => ({ ...a, status: { ...a.status, state: 'cancelled' } }))
+    } catch { /* 이미 끝난 작업 — 다음 폴링에서 상태 갱신 */ }
   }
 
   /* ---- 경기장 보정 ---- */
@@ -595,7 +693,7 @@ function App() {
                   playsInline onClick={calibrating ? undefined : togglePlay} {...videoHandlers} />
                 {analysisMode && (
                   <VideoOverlay analysis={analysis.data} frameIndex={videoFrame} teamColors={teamColors}
-                    showBoxes={showBoxes}
+                    showBoxes={showBoxes} showLines={showLines}
                     calibration={calib && { points: calib.points, activeId: calib.activeId, onPick: pickPoint }} />
                 )}
                 {!video.ready && !video.error && <div className="pane-center muted">영상 불러오는 중</div>}
@@ -677,9 +775,15 @@ function App() {
               onRemove={(id) => setCalib((c) => ({ ...c, points: c.points.filter((p) => p.landmark.id !== id) }))}
               onSave={saveCalib} onCancel={() => setCalib(null)} />
           ) : source && !video.error && (
-            <AnalysisCard status={analysis.status} summary={summary} showBoxes={showBoxes}
-              onToggleBoxes={() => setShowBoxes((s) => !s)} onStart={handleStartAnalysis}
-              onCalibrate={startCalibration} />
+            <AnalysisCard status={analysis.status} summary={summary} mode={runMode} onMode={setRunMode}
+              showBoxes={showBoxes} onToggleBoxes={() => setShowBoxes((s) => !s)}
+              showLines={showLines} onToggleLines={() => setShowLines((s) => !s)}
+              onStart={handleStartAnalysis} onCancel={handleCancelAnalysis} onCalibrate={startCalibration} />
+          )}
+
+          {analysisMode && analysis.data?.stats && !calibrating && (
+            <MatchStatsCard stats={analysis.data.stats} fps={fps} teamColors={teamColors}
+              onSeek={seekTo} currentFrame={videoFrame} />
           )}
 
           <section className="card" style={{ '--home': teamColors.home, '--away': teamColors.away }}>

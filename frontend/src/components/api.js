@@ -137,7 +137,11 @@ async function requestJson(path, options) {
 
 const analysisPath = (name) => `/analysis/${encodeURIComponent(name)}`;
 
-export const startAnalysis = (name) => requestJson(analysisPath(name), { method: 'POST' });
+/** mode: 'precise'(고정밀, 기본) | 'realtime'(빠른 미리보기) */
+export const startAnalysis = (name, mode) =>
+  requestJson(`${analysisPath(name)}${mode ? `?mode=${mode}` : ''}`, { method: 'POST' });
+export const cancelAnalysis = (name) => requestJson(analysisPath(name), { method: 'DELETE' });
+export const getStats = (name) => requestJson(`${analysisPath(name)}/stats`);
 export const getAnalysisStatus = (name) => requestJson(`${analysisPath(name)}/status`);
 export const getAnalysis = (name) => requestJson(analysisPath(name));
 export const saveCalibration = (name, keyframes) =>

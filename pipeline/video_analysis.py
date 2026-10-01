@@ -306,6 +306,13 @@ def ground_point(x1: int, y1: int, x2: int, y2: int) -> Tuple[float, float]:
     return (x1 + x2) / 2, float(y2)
 
 
+def clipped_by_border(o: list, width: int, height: int, margin: int = 2) -> bool:
+    """박스가 화면 좌·우·아래 가장자리에 닿아 잘렸는지 (위쪽은 머리가 잘려도 발 위치는 정확)"""
+    if not width or not height:
+        return False
+    return o[2] <= margin or o[4] >= width - 1 - margin or o[5] >= height - 1 - margin
+
+
 def calibrate(result: Dict, keyframe_points: List[Dict], line_masks=None, smooth: Optional[bool] = None) -> Dict:
     """
     keyframe_points: [{frame: int, points: [{image: [u, v], pitch: [x, y]}, ...]}, ...]
@@ -335,6 +342,8 @@ def calibrate(result: Dict, keyframe_points: List[Dict], line_masks=None, smooth
             world.append(None)
             continue
         entries = []
+        # 화면 가장자리에 잘린 선수 박스는 발 위치(하단 중앙)가 틀리므로 제외 — 속력이 튀는 주원인
+        objs = [o for o in objs or [] if o[1] == KIND_BALL or not clipped_by_border(o, result.get('width'), result.get('height'))]
         if objs:
             pts = np.float32([ground_point(*o[2:6]) for o in objs]).reshape(-1, 1, 2)
             for o, (x, y) in zip(objs, cv2.perspectiveTransform(pts, H).reshape(-1, 2)):

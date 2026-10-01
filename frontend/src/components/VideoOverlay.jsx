@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { KIND_BALL, videoRect, inkOn } from '../analysis'
+import { KIND_BALL, videoRect, inkOn, projectedPitchLines } from '../analysis'
 
 const ACCENT = '#D7FF3C'
 const OTHER = '#9AA3AD'
@@ -9,7 +9,7 @@ const OTHER = '#9AA3AD'
  * - 분석 결과의 frameIndex 프레임 박스를 팀 색으로 그림 (선수 #ID, 공 BALL)
  * - 보정 모드: 클릭한 지점을 원본 해상도 픽셀 좌표로 onPick 에 전달, 찍은 점 표시
  */
-export function VideoOverlay({ analysis, frameIndex, teamColors, showBoxes, calibration }) {
+export function VideoOverlay({ analysis, frameIndex, teamColors, showBoxes, showLines, calibration }) {
   const canvasRef = useRef(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
 
@@ -51,8 +51,24 @@ export function VideoOverlay({ analysis, frameIndex, teamColors, showBoxes, cali
       ctx.fillText(text, x + 5, y - 8.5)
     }
 
+    // 보정 확인: 이 프레임의 호모그래피로 투영한 경기장 라인이 영상의 흰 라인과 겹치면 보정이 맞은 것
+    if (showLines && !calibration) {
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(rect.x, rect.y, analysis.width * rect.scale, analysis.height * rect.scale)
+      ctx.clip()
+      ctx.strokeStyle = 'rgba(215, 255, 60, 0.75)'
+      ctx.lineWidth = 1.25
+      for (const pl of projectedPitchLines(analysis, frameIndex)) {
+        ctx.beginPath()
+        pl.forEach(([u, v], i) => (i ? ctx.lineTo(X(u), Y(v)) : ctx.moveTo(X(u), Y(v))))
+        ctx.stroke()
+      }
+      ctx.restore()
+    }
+
     if (showBoxes && !calibration) {
-      for (const [id, kind, x1, y1, x2, y2] of analysis.frames[frameIndex] ?? []) {
+      for (const [id, kind, x1, y1, x2, y2, conf] of analysis.frames[frameIndex] ?? []) {
         if (kind === KIND_BALL) {
           const cx = X((x1 + x2) / 2), cy = Y((y1 + y2) / 2)
           const r = Math.max((x2 - x1) * rect.scale, (y2 - y1) * rect.scale) / 2 + 5
@@ -66,7 +82,9 @@ export function VideoOverlay({ analysis, frameIndex, teamColors, showBoxes, cali
           const color = teamColors[analysis.teams?.[id]] ?? OTHER
           ctx.strokeStyle = color
           ctx.lineWidth = 1.75
+          ctx.setLineDash(conf === 0 ? [4, 3] : []) // 신뢰도 0 = 후처리로 보간한 박스 (가려진 구간)
           ctx.strokeRect(X(x1), Y(y1), (x2 - x1) * rect.scale, (y2 - y1) * rect.scale)
+          ctx.setLineDash([])
           chip(`#${id}`, X(x1), Y(y1), color)
         }
       }
@@ -86,7 +104,7 @@ export function VideoOverlay({ analysis, frameIndex, teamColors, showBoxes, cali
         chip(landmark.label, x + 8, y + 4, 'rgba(10, 11, 13, 0.8)')
       }
     }
-  }, [analysis, frameIndex, teamColors, showBoxes, calibration, size])
+  }, [analysis, frameIndex, teamColors, showBoxes, showLines, calibration, size])
 
   const handleClick = (e) => {
     const rect = videoRect(size.w, size.h, analysis?.width, analysis?.height)

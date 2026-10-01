@@ -215,3 +215,14 @@ def test_analysis_api_flow(client):
 def test_analysis_rejects_unknown_and_traversal(client):
     assert client.post("/analysis/nope.mp4").status_code == 404
     assert client.get("/analysis/..%2F..%2Fsecret/status").status_code == 404
+
+
+def test_calibrate_skips_boxes_clipped_by_frame_border():
+    frames = [[[1, 0, 490, 300, 510, 340, 0.9],      # 화면 안
+               [2, 0, 0, 300, 15, 340, 0.9],         # 왼쪽 가장자리에 잘림
+               [3, 0, 600, 640, 620, 679, 0.9],      # 아래 가장자리에 잘림 (발이 화면 밖)
+               [0, 1, 0, 100, 6, 106, 0.5]]]         # 공은 가장자리여도 유지
+    res = fake_result(frames)
+    res.update(width=1000, height=680)
+    world = va.calibrate(res, [{'frame': 0, 'points': RECT_POINTS}])['world'][0]
+    assert sorted(e[0] for e in world) == [0, 1]

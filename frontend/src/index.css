@@ -438,3 +438,27 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
 .calibration-points li { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line); color: var(--text-2); }
 .link-btn { border: 0; background: none; padding: 0; font-size: 12px; color: var(--text-3); }
 .link-btn:hover { color: var(--danger); }
+
+/* ---------- 분석 모드 · 경기 지표 ---------- */
+.tag-cancelled { color: var(--text-3); }
+.analysis-card .segmented, .stats-card .segmented { display: flex; margin: 4px 0 2px; }
+.analysis-card .segmented button, .stats-card .segmented button { flex: 1; justify-content: center; }
+.stats-card .segmented { margin-top: 12px; }
+
+.stats-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
+.stats-table th { text-align: right; font-weight: 500; color: var(--text-3); padding: 4px 0; }
+.stats-table td { text-align: right; padding: 5px 0; border-top: 1px solid var(--line); color: var(--text-2); }
+.stats-table th:first-child, .stats-table td:first-child { text-align: left; color: var(--text); }
+.stats-table small { color: var(--accent); font-weight: 600; }
+
+.team-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+
+.event-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: 240px; overflow-y: auto; font-size: 12px; }
+.event-list button {
+  width: 100%; display: grid; grid-template-columns: 52px auto 1fr auto; align-items: center; gap: 6px;
+  padding: 6px 4px; border: 0; border-top: 1px solid var(--line); background: none; color: var(--text-2);
+  text-align: left; cursor: pointer;
+}
+.event-list button:hover { background: var(--surface-2); color: var(--text); }
+.event-list button.active { color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
+.event-list .team-dot { margin-right: 0; }
