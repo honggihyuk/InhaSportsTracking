@@ -318,7 +318,7 @@ YOLO·GPU 없이 실행되는 35 개 테스트입니다.
 | 보안 | CORS 모든 출처 허용. `.env`(API 키)는 추적 해제했지만 과거 커밋 기록에 남아 있음 | 배포 전 출처 제한, **Roboflow 키 재발급** |
 | 연결 | 백엔드 재시작 시 WebSocket 자동 재연결 없음 | 지수 백오프 재연결 |
 | 파이프라인 CLI | `python -m pipeline.main_pipeline --video` 는 앞 50 프레임만 처리 | 업로드 → 분석 API 사용, 또는 `--max-frames` 인자 추가 |
-| 의존성 | `deck.gl`, `react-markdown` 미사용 | 제거 |
+| 의존성 | ~~`deck.gl`, `react-markdown` 미사용~~ | **해결** — 제거 (npm audit 취약점 13 건이 모두 deck.gl 의존성이었음) |
 
 ---
 
