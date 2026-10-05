@@ -304,7 +304,8 @@ function AnalysisCard({ status, summary, mode, onMode, showBoxes, onToggleBoxes,
           <Segmented label="분석 모드" value={mode} onChange={onMode}
             options={MODES.map(([key, text]) => [key, text])} />
           <p className="card-text">{state === 'error' ? status.error : MODES.find(([k]) => k === mode)[2]}</p>
-          <button className="btn btn-primary btn-block" onClick={onStart}>
+          {/* onClick 에 onStart 를 그대로 넘기면 클릭 이벤트가 분석 모드 인자로 전달됨 (?mode=[object Object] → 400) */}
+          <button className="btn btn-primary btn-block" onClick={() => onStart()}>
             <Icon name="scan" size={16} />{state === 'none' ? '분석 시작' : '다시 분석'}
           </button>
         </>
@@ -319,7 +320,7 @@ function AnalysisCard({ status, summary, mode, onMode, showBoxes, onToggleBoxes,
               : status?.mode === 'precise' ? '고정밀 분석 중입니다. 끝나면 경기장을 자동으로 보정합니다. ' : ''}
             다른 화면을 봐도 계속 진행됩니다.
           </p>
-          <button className="btn btn-ghost btn-block" onClick={onCancel}>취소</button>
+          <button className="btn btn-ghost btn-block" onClick={() => onCancel()}>취소</button>
         </>
       )}
 
@@ -356,11 +357,11 @@ function AnalysisCard({ status, summary, mode, onMode, showBoxes, onToggleBoxes,
             </label>
           )}
           {summary.calibratedPct < 100 && (
-            <button className={`btn btn-block ${summary.calibratedPct ? 'btn-ghost' : 'btn-primary'}`} onClick={onAutoCalibrate}>
+            <button className={`btn btn-block ${summary.calibratedPct ? 'btn-ghost' : 'btn-primary'}`} onClick={() => onAutoCalibrate()}>
               <Icon name="scan" size={15} />{summary.calibratedPct ? '자동 보정 다시 실행' : '자동 보정'}
             </button>
           )}
-          <button className="btn btn-ghost btn-block" onClick={onCalibrate}>
+          <button className="btn btn-ghost btn-block" onClick={() => onCalibrate()}>
             <Icon name="target" size={15} />{summary.calibratedPct ? '현재 프레임 보정 추가' : '기준점 직접 지정'}
           </button>
           {doneMode !== 'precise' && (
@@ -588,13 +589,16 @@ function App() {
     if (layout === 'twin') setLayout('split')
   }
 
+  const markReady = (v) => {
+    // updater 는 나중에 실행되므로 영상 값은 미리 꺼내 둔다 (그 시점엔 이벤트 currentTarget 이 null)
+    const { duration } = v
+    setVideo((s) => (s.ready ? s : { ...s, ready: true, duration }))
+  }
+
   const videoHandlers = {
-    onLoadedMetadata: (e) => {
-      // updater 는 나중에 실행되므로 이벤트 값은 미리 꺼내 둔다 (그 시점엔 currentTarget 이 null)
-      const { duration } = e.currentTarget
-      setVideo((s) => ({ ...s, ready: true, duration }))
-      syncStream(true)
-    },
+    onLoadedMetadata: (e) => { markReady(e.currentTarget); syncStream(true) },
+    // 일부 브라우저·캐시된 영상은 loadedmetadata 를 놓칠 수 있어, 첫 프레임 로드 시에도 준비 상태로 표시
+    onLoadedData: (e) => markReady(e.currentTarget),
     onPlay: () => { setVideo((s) => ({ ...s, playing: true })); syncStream(false) },
     onPause: () => { setVideo((s) => ({ ...s, playing: false })); syncStream(true) },
     onSeeked: (e) => syncStream(e.currentTarget.paused),

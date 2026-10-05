@@ -138,8 +138,10 @@ async function requestJson(path, options) {
 const analysisPath = (name) => `/analysis/${encodeURIComponent(name)}`;
 
 /** mode: 'precise'(고정밀, 기본) | 'realtime'(빠른 미리보기) */
+const ANALYSIS_MODES = ['precise', 'realtime'];
 export const startAnalysis = (name, mode) =>
-  requestJson(`${analysisPath(name)}${mode ? `?mode=${mode}` : ''}`, { method: 'POST' });
+  // 문자열 모드만 전달 (이벤트 객체 등이 넘어와도 서버 기본 모드로 시작)
+  requestJson(`${analysisPath(name)}${ANALYSIS_MODES.includes(mode) ? `?mode=${mode}` : ''}`, { method: 'POST' });
 export const cancelAnalysis = (name) => requestJson(analysisPath(name), { method: 'DELETE' });
 export const getStats = (name) => requestJson(`${analysisPath(name)}/stats`);
 /** 기준점 없이 경기장 라인·센터서클로 자동 보정 (백그라운드, /status 로 진행 확인) */
