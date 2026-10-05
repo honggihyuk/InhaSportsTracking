@@ -4,7 +4,7 @@
 >
 > 이 문서는 **현재 코드 기준**으로 사용 기술, 구현된 기능, 알려진 제약, 향후 구현 계획을 정리합니다. 빠른 실행 방법은 [README](../README.md)를 참고하세요.
 >
-> **다음 문서**: [2부 — 영상 분석 · 경기장 보정 · 3D 트윈 연동](./PROJECT_OVERVIEW_2_VIDEO_ANALYSIS.md) · [3부 — CV 고도화 · VLM 설계](./PROJECT_OVERVIEW_3_VLM.md) · [4부 — 고정밀 분석 모드](./PROJECT_OVERVIEW_4_PRECISE_ANALYSIS.md)
+> **다음 문서**: [2부 — 영상 분석 · 경기장 보정 · 3D 트윈 연동](./PROJECT_OVERVIEW_2_VIDEO_ANALYSIS.md) · [3부 — CV 고도화 · VLM 설계](./PROJECT_OVERVIEW_3_VLM.md) · [4부 — 고정밀 분석 모드](./PROJECT_OVERVIEW_4_PRECISE_ANALYSIS.md) · [5부 — 자동 초기 보정](./PROJECT_OVERVIEW_5_AUTO_CALIBRATION.md)
 
 ---
 
@@ -297,7 +297,7 @@ YOLO·GPU 없이 실행되는 35 개 테스트입니다.
 | 카메라 움직임 추정 · 보정 전파 | 완료 | |
 | **분석 결과 → 3D 트윈 연동** | **완료** | **수동 경기장 보정 필요** |
 | **고정밀 분석 모드** | **완료** | 라인 정렬 보정·트랙 잇기·좌표 평활화·경기 지표 — [4부](./PROJECT_OVERVIEW_4_PRECISE_ANALYSIS.md) |
-| 자동 경기장 보정 | 부분 | 키프레임 이후 매 프레임 라인 자동 정렬 완료, 첫 키프레임은 수동 ([4부 36절](./PROJECT_OVERVIEW_4_PRECISE_ANALYSIS.md#36-한계와-다음-단계)) |
+| **자동 경기장 보정** | **완료** | 기준점 입력 없이 라인·센터서클 기하로 키프레임 검출 + 매 프레임 라인 정렬 — [5부](./PROJECT_OVERVIEW_5_AUTO_CALIBRATION.md) (실제 중계 영상 검증 필요) |
 | 3D Gaussian Splatting 렌더링 | 부분 | 모듈만 존재, `render()` 미구현 |
 
 ---

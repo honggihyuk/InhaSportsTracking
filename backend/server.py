@@ -193,7 +193,10 @@ class CalibrationPoint(BaseModel):
 
 class CalibrationKeyframe(BaseModel):
     frame: int
-    points: List[CalibrationPoint]
+    points: List[CalibrationPoint] = []
+    homography: Optional[List[float]] = None  # 자동 보정 키프레임: 이미지 → 경기장 3x3 (기준점 대신)
+    source: Optional[str] = None              # 'auto' | None(수동)
+    score: Optional[Dict[str, float]] = None  # 자동 보정 일치도
 
 
 class CalibrationRequest(BaseModel):
@@ -273,12 +276,61 @@ def _run_analysis(name: str, mode: Optional[str] = None):
         if lines is not None and len(lines):
             ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
             lines.save(_lines_file(name))
+            if profile.get("auto_calibrate"):
+                job.update(stage="calibrating", progress=0.0)  # 사람 입력 없이 경기장 보정까지
+                _try_auto_calibrate(result, lines, progress)
         video_analysis.save(result, _analysis_file(name))
         job.update(state="done", progress=1.0)
     except AnalysisCancelled:
         job.update(state="cancelled")
     except Exception as e:  # 작업 스레드 예외는 상태로 전달
         print(f"분석 실패 ({name}): {e}")
+        job.update(state="error", error=str(e))
+
+
+def _try_auto_calibrate(result: Dict, lines, progress=lambda d, t: None) -> Dict:
+    """자동 보정 시도 → 결과를 result['auto_calibration'] 에 기록 (실패해도 분석 결과는 유지)"""
+    from pipeline import video_analysis
+    try:
+        info = video_analysis.auto_calibrate(result, lines, progress=progress)
+        result["auto_calibration"] = {"status": "ok", **info}
+    except ValueError as e:
+        result["auto_calibration"] = {"status": "failed", "reason": str(e)}
+    return result["auto_calibration"]
+
+
+def _run_auto_calibration(name: str):
+    """분석이 끝난 영상의 자동 보정 작업. 라인 마스크가 없으면(빠른 미리보기 결과) 영상을 다시 읽어 만든다"""
+    from pipeline import video_analysis
+    from pipeline.pitch import LineMaskStore, video_line_masks
+
+    job = analysis_jobs[name]
+    if job.get("cancel"):
+        return
+
+    def progress(done, total):
+        if job.get("cancel"):
+            raise AnalysisCancelled()
+        job.update(progress=done / max(total, 1))
+
+    try:
+        job["state"] = "running"
+        result = video_analysis.load(_analysis_file(name))
+        if _lines_file(name).is_file():
+            lines = LineMaskStore.load(_lines_file(name))
+        else:
+            job.update(stage="lines")
+            lines = video_line_masks(_video_file(name), result["frames"], max_frames=result["frame_count"],
+                                     progress=progress)
+            lines.save(_lines_file(name))
+        job.update(stage="calibrating", progress=0.0)
+        _try_auto_calibrate(result, lines, progress)
+        video_analysis.save(result, _analysis_file(name))
+        job.update(state="done", progress=1.0)
+    except AnalysisCancelled:
+        job.update(state="cancelled")
+    except Exception as e:
+        print(f"자동 보정 실패 ({name}): {e}")
         job.update(state="error", error=str(e))
 
 
@@ -294,7 +346,8 @@ def _analysis_status(name: str) -> Dict:
                 "calibrated": result.get("calibration") is not None,
                 "mode": result.get("mode", "realtime"),
                 "line_refine": _lines_file(name).is_file(),
-                "has_stats": result.get("stats") is not None}
+                "has_stats": result.get("stats") is not None,
+                "auto_calibration": result.get("auto_calibration")}
     if job and job["state"] == "cancelled":
         return {"name": name, "state": "cancelled", "progress": job.get("progress", 0.0)}
     return {"name": name, "state": "none", "progress": 0.0}
@@ -308,7 +361,7 @@ def start_analysis(name: str, mode: Optional[str] = None):
         raise HTTPException(status_code=400, detail="mode 는 realtime 또는 precise 입니다.")
     if analysis_jobs.get(name, {}).get("state") in ("queued", "running"):
         raise HTTPException(status_code=409, detail="이미 분석 중입니다.")
-    analysis_jobs[name] = {"state": "queued", "progress": 0.0, "mode": mode}
+    analysis_jobs[name] = {"state": "queued", "progress": 0.0, "mode": mode, "stage": "analyzing"}
     analysis_executor.submit(_run_analysis, name, mode)
     return _analysis_status(name)
 
@@ -354,13 +407,16 @@ def save_calibration(name: str, body: CalibrationRequest):
     for kf in body.keyframes:
         if any(len(p.image) != 2 or len(p.pitch) != 2 for p in kf.points):
             raise HTTPException(status_code=400, detail="보정점 좌표는 [x, y] 형식이어야 합니다.")
+        if kf.homography is not None and len(kf.homography) != 9:
+            raise HTTPException(status_code=400, detail="homography 는 9 개 값이어야 합니다.")
     result = video_analysis.load(path)
     lines = None
     if body.refine is not False and _lines_file(name).is_file():
         from pipeline.pitch import LineMaskStore
         lines = LineMaskStore.load(_lines_file(name))  # 정밀 모드: 매 프레임 경기장 라인 정렬
     try:
-        video_analysis.calibrate(result, [kf.model_dump() for kf in body.keyframes], line_masks=lines)
+        video_analysis.calibrate(result, [kf.model_dump(exclude_none=True) for kf in body.keyframes],
+                                 line_masks=lines)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     video_analysis.save(result, path)
@@ -368,6 +424,22 @@ def save_calibration(name: str, body: CalibrationRequest):
     return {"name": name, "calibrated_frames": covered, "frame_count": result["frame_count"],
             "refined_frames": result["calibration"].get("refined_frames"),
             "has_stats": result.get("stats") is not None}
+
+
+@app.post("/analysis/{name}/calibration/auto")
+def start_auto_calibration(name: str):
+    """
+    자동 경기장 보정 시작 (백그라운드) — 기준점 없이 경기장 라인·센터서클로 키프레임을 찾아 전 프레임 보정.
+    진행 상황은 /status (stage: lines → calibrating), 결과는 status.auto_calibration
+    """
+    _video_file(name)
+    if not _analysis_file(name).is_file():
+        raise HTTPException(status_code=404, detail="먼저 영상을 분석하세요.")
+    if analysis_jobs.get(name, {}).get("state") in ("queued", "running"):
+        raise HTTPException(status_code=409, detail="이미 작업 중입니다.")
+    analysis_jobs[name] = {"state": "queued", "progress": 0.0, "stage": "calibrating"}
+    analysis_executor.submit(_run_auto_calibration, name)
+    return _analysis_status(name)
 
 
 @app.get("/analysis/{name}/stats")

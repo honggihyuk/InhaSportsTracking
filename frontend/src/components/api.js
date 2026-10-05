@@ -142,6 +142,9 @@ export const startAnalysis = (name, mode) =>
   requestJson(`${analysisPath(name)}${mode ? `?mode=${mode}` : ''}`, { method: 'POST' });
 export const cancelAnalysis = (name) => requestJson(analysisPath(name), { method: 'DELETE' });
 export const getStats = (name) => requestJson(`${analysisPath(name)}/stats`);
+/** 기준점 없이 경기장 라인·센터서클로 자동 보정 (백그라운드, /status 로 진행 확인) */
+export const autoCalibrate = (name) =>
+  requestJson(`${analysisPath(name)}/calibration/auto`, { method: 'POST' });
 export const getAnalysisStatus = (name) => requestJson(`${analysisPath(name)}/status`);
 export const getAnalysis = (name) => requestJson(analysisPath(name));
 export const saveCalibration = (name, keyframes) =>

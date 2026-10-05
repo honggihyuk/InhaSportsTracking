@@ -6,6 +6,7 @@ pipeline/synthetic.py 로 팬·줌하는 중계 화면을 만들고, 정답 박�
 섞은 "모의 탐지기"로 두 모드를 똑같이 돌려 다음을 비교한다.
 
   - 보정 오차: 키프레임 1 개(클릭 오차 ±1.5 px)에서 전파한 호모그래피의 경기장 위치 오차 (m)
+    (세 번째 구성은 기준점 입력 없이 자동 보정 — pipeline/autocalib.py)
   - 선수 위치 오차: 경기장 좌표 vs 정답 (m)
   - 속력 오차: 0.2 초 차분(현재 화면 방식) / 평활 속력 vs 정답 (m/s)
   - ID 안정성: 정답 선수 1 명당 트랙 ID 수 (1 이 이상적)
@@ -200,16 +201,23 @@ def main():
         rng = np.random.default_rng(args.seed + 7)
         kf = [{'frame': 0, 'points': keyframe_clicks(clip, 0, rng)}]
 
-        for mode, stride in (('realtime', 3), ('precise', 1)):
+        for name, mode, stride in (('realtime', 'realtime', 3), ('precise', 'precise', 1),
+                                   ('precise + 자동 보정 (기준점 입력 없음)', 'precise', 1)):
             t0 = time.time()
             tracker = SoccerTracker(tracker_type=args.tracker, max_age=30)
             tracker.ball_tracker = BallTracker(max_jump=60 * stride)
             lines = LineMaskStore((0, 0)) if mode == 'precise' else None
             res = va.analyze_video(video, MockDetector(clip, index, seed=args.seed + 1), tracker,
                                    stride=stride, mode=mode, line_store=lines)
-            res = va.calibrate(res, kf, line_masks=lines)
-            print(f"\n{mode}: 분석+보정 {time.time() - t0:.1f}s")
-            evaluate(mode, clip, res, fps)
+            t1 = time.time()
+            if '자동' in name:
+                info = va.auto_calibrate(res, lines)
+                print(f"\n{name}: 분석 {t1 - t0:.1f}s + 자동 보정 {time.time() - t1:.1f}s "
+                      f"(자동 키프레임 {[k['frame'] for k in res['calibration']['keyframes']]})")
+            else:
+                res = va.calibrate(res, kf, line_masks=lines)
+                print(f"\n{name}: 분석+보정 {time.time() - t0:.1f}s")
+            evaluate(name, clip, res, fps)
 
 
 if __name__ == '__main__':

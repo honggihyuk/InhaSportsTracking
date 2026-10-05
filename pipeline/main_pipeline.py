@@ -107,7 +107,7 @@ class Soccer3DPipeline:
         영상 분석 설정 (analysis 섹션 + 모드별 profiles 덮어쓰기)
 
         Returns:
-            {mode, stride, img_size, ball_imgsz, ball_tile, postprocess, line_refine}
+            {mode, stride, img_size, ball_imgsz, ball_tile, postprocess, line_refine, auto_calibrate}
         """
         cfg = self.config.get('analysis', {})
         mode = mode or cfg.get('mode', 'realtime')
@@ -122,6 +122,7 @@ class Soccer3DPipeline:
             'ball_tile': None,
             'postprocess': mode == 'precise',
             'line_refine': mode == 'precise',
+            'auto_calibrate': mode == 'precise',
         }
         base.update(profiles.get(mode) or {})
         base['mode'] = mode

@@ -256,8 +256,16 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
 # ---------------------------------------------------------------------------
 # 경기장 보정
 # ---------------------------------------------------------------------------
-def keyframe_homography(points: List[Dict]) -> np.ndarray:
-    """[{image: [u, v], pitch: [x, y]}, ...] (4 개 이상) → 이미지 → 경기장 호모그래피"""
+def keyframe_homography(points: List[Dict], homography: Optional[list] = None) -> np.ndarray:
+    """
+    [{image: [u, v], pitch: [x, y]}, ...] (4 개 이상) → 이미지 → 경기장 호모그래피
+    자동 보정 키프레임은 기준점 대신 homography(9 개 값)를 직접 가진다.
+    """
+    if homography is not None:
+        H = np.array(homography, float).reshape(3, 3)
+        if not np.all(np.isfinite(H)) or abs(np.linalg.det(H)) < 1e-15:
+            raise ValueError("자동 보정 호모그래피가 올바르지 않습니다.")
+        return H
     if len(points) < 4:
         raise ValueError("보정점은 4 개 이상 필요합니다.")
     img = np.float32([p['image'] for p in points])
@@ -329,7 +337,8 @@ def calibrate(result: Dict, keyframe_points: List[Dict], line_masks=None, smooth
 
     if smooth is None:
         smooth = result.get('mode') == 'precise'
-    keyframes = {int(kf['frame']): keyframe_homography(kf['points']) for kf in keyframe_points}
+    keyframes = {int(kf['frame']): keyframe_homography(kf.get('points') or [], kf.get('homography'))
+                 for kf in keyframe_points}
     if line_masks is not None:
         scale = line_masks.shape[1] / result['width'] if getattr(line_masks, 'shape', None) else MOTION_SCALE
         Hs, quality = pitch_lines.track_homographies(result['motion'], keyframes, line_masks,
@@ -369,6 +378,33 @@ def calibrate(result: Dict, keyframe_points: List[Dict], line_masks=None, smooth
         result['teams'] = teams
         result['stats'] = match_stats.compute(result)
     return result
+
+
+def auto_calibrate(result: Dict, line_masks, every_s: float = 2.0, smooth: Optional[bool] = None,
+                   progress: Callable[[int, int], None] = lambda d, t: None) -> Dict:
+    """
+    사람이 기준점을 찍지 않고 경기장 라인으로 키프레임을 자동으로 찾아 보정 (pipeline/autocalib.py)
+
+    기존 수동 키프레임은 유지하고, 수동 키프레임 ±1 초 안의 자동 키프레임은 버린다 (사람 입력 우선).
+    자동 키프레임을 하나도 못 찾고 수동 키프레임도 없으면 ValueError.
+
+    Returns:
+        {'auto': 자동 키프레임 수, 'manual': 수동 키프레임 수, 'calibrated_frames': 보정된 프레임 수}
+    """
+    from . import autocalib
+
+    fps = result.get('fps') or 30.0
+    scale = line_masks.shape[1] / result['width'] if getattr(line_masks, 'shape', None) else MOTION_SCALE
+    auto = autocalib.auto_keyframes(result['motion'], line_masks, (result['width'], result['height']), fps=fps,
+                                    every_s=every_s, scale=scale, progress=progress)
+    manual = [kf for kf in (result.get('calibration') or {}).get('keyframes', []) if kf.get('source') != 'auto']
+    near_manual = lambda f: any(abs(f - int(m['frame'])) <= fps for m in manual)
+    auto = [kf for kf in auto if not near_manual(kf['frame'])]
+    if not auto and not manual:
+        raise ValueError("경기장 라인으로 자동 보정할 수 있는 프레임을 찾지 못했습니다. 기준점을 직접 지정하세요.")
+    calibrate(result, sorted(manual + auto, key=lambda k: int(k['frame'])), line_masks=line_masks, smooth=smooth)
+    return {'auto': len(auto), 'manual': len(manual),
+            'calibrated_frames': sum(w is not None for w in result['world'])}
 
 
 def save(result: Dict, path: Path):
