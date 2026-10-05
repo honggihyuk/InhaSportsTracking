@@ -11,8 +11,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 from roboflow import Roboflow
 
-# 환경 변수 로드
-load_dotenv()
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# 환경 변수 로드 (프로젝트 루트의 .env)
+load_dotenv(PROJECT_ROOT / ".env")
 
 class RoboflowDatasetDownloader:
     """Roboflow 축구 관련 데이터셋 다운로드 관리자"""
@@ -32,7 +34,7 @@ class RoboflowDatasetDownloader:
             )
         
         self.rf = Roboflow(api_key=self.api_key)
-        self.datasets_dir = Path("data/roboflow_datasets")
+        self.datasets_dir = PROJECT_ROOT / "data" / "roboflow_datasets"
         self.datasets_dir.mkdir(parents=True, exist_ok=True)
         
         # 데이터셋 정보

@@ -7,9 +7,10 @@ import numpy as np
 import cv2
 from pathlib import Path
 
-# PYTHONPATH 설정
+# 프로젝트 루트를 import 경로에 추가 (python scripts/sample_test.py 로 실행)
 import sys
-sys.path.insert(0, '/workspace')
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from tracking.homography import HomographyTransformer
 from gs_model.canonical_gs import CanonicalGaussianSpace
@@ -101,7 +102,7 @@ def test_deformation_mlp():
     return mlp
 
 
-def create_sample_video(output_path='data/raw/sample_video.mp4', duration=5):
+def create_sample_video(output_path=str(PROJECT_ROOT / 'data' / 'raw' / 'sample_video.mp4'), duration=5):
     """샘플 비디오 생성 (더미)"""
     print(f"\n=== 샘플 비디오 생성 ===")
     

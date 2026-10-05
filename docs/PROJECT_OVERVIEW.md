@@ -68,7 +68,7 @@ flowchart LR
 | 3DGS 모델 | `gs_model/` | 3D Gaussian Splatting 표준 공간 및 변형 네트워크 (렌더링 미연동) |
 | 백엔드 | `backend/server.py` | 업로드·영상 제공, 분석 작업·결과·보정 API, WebSocket 스트림 |
 | 프론트엔드 | `frontend/src/` | 영상 플레이어·탐지 박스 오버레이·보정 도구·3D 트윈·통계 UI |
-| 테스트 | `tests/` | 단위·통합 테스트 35 개 |
+| 테스트 | `tests/` | 단위·통합 테스트 (1부 시점 35 개 → 현재 68 개, [테스트 가이드](./guides/TESTING.md)) |
 | 설정 | `configs/` | 모델·분석·추적·경기장 규격 설정 |
 
 ---
@@ -80,7 +80,7 @@ flowchart LR
 | 기술 | 버전 | 사용 위치 | 역할 및 선택 이유 |
 |---|---|---|---|
 | **Ultralytics YOLO11** | 8.4 | `tracking/detector.py` | 객체 탐지. CPU 기본값은 `yolo11n`(선수 640 px, 공 960 px), GPU 에서는 `yolo11s` 권장 |
-| **Roboflow 축구 전문 모델** | — | `setup_roboflow.py`, `scripts/` | 선수·공·경기장 전용 모델. 경로를 지정하면 COCO 범용 모델 대신 사용 |
+| **Roboflow 축구 전문 모델** | — | `scripts/setup_roboflow.py` | 선수·공·경기장 전용 모델. 경로를 지정하면 COCO 범용 모델 대신 사용 |
 | **boxmot BoT-SORT** | 25.0 | `tracking/tracker.py` | 다중 객체 추적. **희소 광류 카메라 움직임 보정(CMC)** 으로 팬·줌하는 중계 화면에서 ID 가 가장 안정적 (아래 비교표) |
 | **OpenCV** | 4.x / 5.0 | 분석 전반 | 광류(`calcOpticalFlowPyrLK`)·호모그래피(`findHomography` RANSAC)·K-means·HSV 잔디 마스크·영상 입출력 |
 | **NumPy** | 2.x | 전반 | IoU 행렬, 호모그래피 합성, 좌표 변환 |
@@ -315,7 +315,7 @@ YOLO·GPU 없이 실행되는 35 개 테스트입니다.
 | 가려짐 | 선수가 겹치면 탐지가 합쳐지거나 누락, 보간 구간에 없는 트랙은 표시 안 됨 | 탐지 간격 축소(GPU), ReID |
 | 작업 상태 | 진행 중 작업 상태는 메모리에만 있어 서버 재시작 시 사라짐 (완료 결과는 파일로 유지) | 작업 큐/DB |
 | 코덱 | 브라우저는 MPEG-4 Part 2 등을 재생하지 못함 | 업로드 시 H.264 자동 변환 |
-| 보안 | CORS 모든 출처 허용, `.env`(API 키)가 저장소에 커밋되어 있음 | 배포 전 출처 제한, 키 재발급 및 추적 해제 |
+| 보안 | CORS 모든 출처 허용. `.env`(API 키)는 추적 해제했지만 과거 커밋 기록에 남아 있음 | 배포 전 출처 제한, **Roboflow 키 재발급** |
 | 연결 | 백엔드 재시작 시 WebSocket 자동 재연결 없음 | 지수 백오프 재연결 |
 | 파이프라인 CLI | `python -m pipeline.main_pipeline --video` 는 앞 50 프레임만 처리 | 업로드 → 분석 API 사용, 또는 `--max-frames` 인자 추가 |
 | 의존성 | `deck.gl`, `react-markdown` 미사용 | 제거 |
