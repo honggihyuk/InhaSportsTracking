@@ -11,6 +11,20 @@ from typing import List, Dict, Optional, Tuple
 import cv2
 import numpy as np
 
+# 프로젝트 루트 — 설정 파일의 상대 경로(models/…, data/…)는 실행 위치와 관계없이 여기를 기준으로 찾는다
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_PLAYER_MODEL = PROJECT_ROOT / "models" / "yolo11s.pt"
+DEFAULT_BALL_MODEL = PROJECT_ROOT / "models" / "yolo11n.pt"
+
+
+def resolve_path(path) -> Path:
+    """상대 경로를 현재 작업 폴더에서 먼저 찾고, 없으면 프로젝트 루트 기준으로 해석"""
+    p = Path(path)
+    if p.is_absolute() or p.exists():
+        return p
+    return PROJECT_ROOT / p
+
+
 # 모델별 class_id 가 겹치지 않도록 부여하는 오프셋
 #   [0, 100): 선수 모델, [100, 200): 공 모델, [200, ...): 필드 모델
 BALL_OFFSET = 100
@@ -129,7 +143,7 @@ class RoboflowSoccerDetector:
         self.tile_overlap = tile_overlap
         
         # 모델 경로 설정
-        base_path = Path("data/roboflow_datasets")
+        base_path = PROJECT_ROOT / "data" / "roboflow_datasets"
         
         # 선수 탐지 모델
         if players_model_path:
@@ -141,7 +155,7 @@ class RoboflowSoccerDetector:
                 self.players_model = self._load_model(str(default_path))
             else:
                 print("⚠️ 선수 탐지 모델이 없습니다. 기본 YOLO11s 를 사용합니다.")
-                self.players_model = _yolo("yolo11s.pt")
+                self.players_model = _yolo(str(DEFAULT_PLAYER_MODEL))
         
         # 공 탐지 모델
         if ball_model_path:
@@ -152,7 +166,7 @@ class RoboflowSoccerDetector:
                 self.ball_model = self._load_model(str(default_path))
             else:
                 print("⚠️ 공 탐지 모델이 없습니다. 기본 YOLO11n 을 사용합니다.")
-                self.ball_model = _yolo("yolo11n.pt")
+                self.ball_model = _yolo(str(DEFAULT_BALL_MODEL))
         
         # 필드 탐지 모델 (선택사항)
         self.field_model = None
@@ -178,7 +192,7 @@ class RoboflowSoccerDetector:
     
     def _load_model(self, model_path: str):
         """모델 로드"""
-        path = Path(model_path)
+        path = resolve_path(model_path)
         
         if not path.exists():
             raise FileNotFoundError(f"모델 파일을 찾을 수 없습니다: {path}")

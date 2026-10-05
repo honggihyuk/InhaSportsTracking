@@ -462,3 +462,7 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
 .event-list button:hover { background: var(--surface-2); color: var(--text); }
 .event-list button.active { color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
 .event-list .team-dot { margin-right: 0; }
+
+/* ---------- 자동 보정 ---------- */
+.warn-text { margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: #F5A524; }
+.btn-row { display: flex; gap: 8px; justify-content: center; }

@@ -1,34 +1,38 @@
-```
 # Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.pytest_cache/
 
-# Dependencies
+# 가상환경
 .venv/
 venv/
 env/
+
+# 비밀 정보 (API 키) — 템플릿(.env.example)만 저장소에 둔다
 .env
 .env.local
 .env.*
+!.env.example
 
-# Build artifacts
+# 빌드 산출물
 dist/
 build/
 *.egg-info/
 
-# Logs
+# 로그
 *.log
+logs/
 
-# Editor/IDE
+# 에디터 / IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 *.tmp
 
-# Coverage
+# 커버리지
 .coverage
 coverage/
 htmlcov/
@@ -36,6 +40,15 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
-```
-# 업로드된 경기 영상
+
+# 실행 중 생기는 데이터
+# - uploads/: 업로드한 경기 영상과 분석 결과 (서버가 자동 생성)
+# - data/processed/: 파이프라인 CLI 출력
+# - data/roboflow_datasets/: scripts/setup_roboflow.py 로 받는 데이터셋·가중치
+# - data/test_detection_result.jpg: scripts/test_roboflow_integration.py 출력
+# - runs/: ultralytics 학습·추론 출력
 uploads/
+data/processed/
+data/roboflow_datasets/
+data/test_detection_result.jpg
+runs/

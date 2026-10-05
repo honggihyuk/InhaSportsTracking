@@ -327,7 +327,7 @@ python -m pytest tests -q        # 55 passed
 
 | 순서 | 작업 | 이번 작업과의 연결 |
 |---|---|---|
-| 1 | **자동 초기 보정** — 경기장 키포인트 모델(RF-DETR keypoint 또는 YOLO-pose, Roboflow football-field) | 검출한 키포인트로 대략적 H 를 만들면 `LineRefiner` 가 정밀화 → 수동 보정 완전 제거, 장면 전환 후 자동 재보정 |
+| 1 | **자동 초기 보정** — ✅ 기하 방식으로 구현 ([5부](./PROJECT_OVERVIEW_5_AUTO_CALIBRATION.md)). 키포인트 모델(RF-DETR keypoint 또는 YOLO-pose, Roboflow football-field)은 가속용으로 남음 | 검출한 키포인트로 대략적 H 를 만들면 `LineRefiner` 가 정밀화 → 수동 보정 완전 제거, 장면 전환 후 자동 재보정 |
 | 2 | **SigLIP2 팀 분류** | `cluster_teams()` 교체. 트랙 잇기 덕분에 트랙당 샘플이 늘어 효과가 커짐 |
 | 3 | **RF-DETR / 공 전용 모델** | `ball_tile` 타일 경로·`BallTracker`·`clean_ball` 을 그대로 사용 |
 | 4 | **SQLite 적재 + VLM 도구** | `stats` 의 `players`·`possession`·`events`·`shape` 가 22.4절 도구 출력 형식과 대응 |

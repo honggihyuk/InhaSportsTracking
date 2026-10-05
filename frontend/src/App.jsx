@@ -4,7 +4,7 @@ import { OrbitControls, Line } from '@react-three/drei'
 import * as THREE from 'three'
 import {
   useWebSocket, uploadVideo, listVideos, startAnalysis, cancelAnalysis, getAnalysisStatus, getAnalysis,
-  saveCalibration,
+  saveCalibration, autoCalibrate,
 } from './components/api'
 import { VideoOverlay } from './components/VideoOverlay'
 import { CalibrationPanel } from './components/CalibrationPanel'
@@ -282,9 +282,10 @@ const MODES = [
   ['realtime', '빠른 미리보기', '3 프레임마다 탐지하고 사이를 보간합니다. 후처리·라인 정렬·경기 지표는 없습니다.'],
 ]
 const STATE_LABEL = { none: '분석 전', queued: '대기 중', done: '완료', error: '오류', cancelled: '취소됨' }
+const STAGE_LABEL = { analyzing: '분석 중', lines: '라인 검출 중', calibrating: '자동 보정 중' }
 
 function AnalysisCard({ status, summary, mode, onMode, showBoxes, onToggleBoxes, showLines, onToggleLines,
-  onStart, onCancel, onCalibrate }) {
+  onStart, onCancel, onCalibrate, onAutoCalibrate }) {
   const state = status?.state ?? 'none'
   const pct = Math.round((status?.progress ?? 0) * 100)
   const doneMode = status?.mode ?? summary?.mode
@@ -293,7 +294,7 @@ function AnalysisCard({ status, summary, mode, onMode, showBoxes, onToggleBoxes,
       <div className="card-head">
         <div className="eyebrow">영상 분석</div>
         <span className={`tag tag-${state}`}>
-          {state === 'running' ? `분석 중 ${pct}%` : STATE_LABEL[state]}
+          {state === 'running' ? `${STAGE_LABEL[status?.stage] ?? '분석 중'} ${pct}%` : STATE_LABEL[state]}
           {state === 'done' && doneMode && ` · ${doneMode === 'precise' ? '고정밀' : '미리보기'}`}
         </span>
       </div>
@@ -313,9 +314,12 @@ function AnalysisCard({ status, summary, mode, onMode, showBoxes, onToggleBoxes,
         <>
           <div className="progress"><span style={{ width: `${pct}%` }} /></div>
           <p className="card-text muted">
-            {status?.mode === 'precise' ? '고정밀 분석 중입니다. ' : ''}분석이 끝나면 자동으로 불러옵니다. 다른 화면을 봐도 계속 진행됩니다.
+            {status?.stage === 'calibrating'
+              ? '경기장 라인과 센터서클로 기준점 없이 보정하고 있습니다. '
+              : status?.mode === 'precise' ? '고정밀 분석 중입니다. 끝나면 경기장을 자동으로 보정합니다. ' : ''}
+            다른 화면을 봐도 계속 진행됩니다.
           </p>
-          <button className="btn btn-ghost btn-block" onClick={onCancel}>분석 취소</button>
+          <button className="btn btn-ghost btn-block" onClick={onCancel}>취소</button>
         </>
       )}
 
@@ -331,8 +335,15 @@ function AnalysisCard({ status, summary, mode, onMode, showBoxes, onToggleBoxes,
           )}
           <div className="kv"><span>경기장 보정</span><strong className={summary.calibratedPct ? '' : 'warn'}>
             {summary.calibratedPct ? <span className="num">{summary.calibratedPct}<small> % 프레임</small></span> : '필요'}</strong></div>
+          {summary.calibratedPct > 0 && (
+            <div className="kv"><span>키프레임</span><strong className="num">
+              자동 {summary.autoKeyframes}<small> · 수동 {summary.manualKeyframes}</small></strong></div>
+          )}
           {summary.refinedPct != null && (
             <div className="kv"><span>라인 정렬</span><strong className="num">{summary.refinedPct}<small> % 프레임</small></strong></div>
+          )}
+          {status?.auto_calibration?.status === 'failed' && !summary.calibratedPct && (
+            <p className="card-text warn-text">{status.auto_calibration.reason}</p>
           )}
           <label className="switch">
             <input type="checkbox" checked={showBoxes} onChange={onToggleBoxes} />
@@ -344,8 +355,13 @@ function AnalysisCard({ status, summary, mode, onMode, showBoxes, onToggleBoxes,
               <span>보정된 경기장 라인 표시</span>
             </label>
           )}
+          {summary.calibratedPct < 100 && (
+            <button className={`btn btn-block ${summary.calibratedPct ? 'btn-ghost' : 'btn-primary'}`} onClick={onAutoCalibrate}>
+              <Icon name="scan" size={15} />{summary.calibratedPct ? '자동 보정 다시 실행' : '자동 보정'}
+            </button>
+          )}
           <button className="btn btn-ghost btn-block" onClick={onCalibrate}>
-            <Icon name="target" size={15} />{summary.calibratedPct ? '현재 프레임 보정 추가' : '경기장 보정'}
+            <Icon name="target" size={15} />{summary.calibratedPct ? '현재 프레임 보정 추가' : '기준점 직접 지정'}
           </button>
           {doneMode !== 'precise' && (
             <button className="btn btn-ghost btn-block" onClick={() => onStart('precise')}>
@@ -435,6 +451,8 @@ function summarize(data) {
       ? Math.round((data.calibration.refined_frames / n) * 100) : null,
     mode: data.mode ?? 'realtime',
     post: data.postprocess ?? null,
+    autoKeyframes: (data.calibration?.keyframes ?? []).filter((k) => k.source === 'auto').length,
+    manualKeyframes: (data.calibration?.keyframes ?? []).filter((k) => k.source !== 'auto').length,
   }
 }
 
@@ -648,6 +666,15 @@ function App() {
     } catch { /* 이미 끝난 작업 — 다음 폴링에서 상태 갱신 */ }
   }
 
+  const handleAutoCalibrate = async () => {
+    try {
+      const status = await autoCalibrate(source.name)
+      setAnalysis((a) => ({ ...a, status })) // 진행 중 → 폴링이 끝나면 결과를 다시 불러옴
+    } catch (err) {
+      setAnalysis((a) => ({ ...a, status: { ...a.status, auto_calibration: { status: 'failed', reason: err.message } } }))
+    }
+  }
+
   /* ---- 경기장 보정 ---- */
   const startCalibration = () => {
     videoRef.current?.pause()
@@ -769,10 +796,16 @@ function App() {
               <div className="pane-center overlay">
                 <Icon name="target" size={28} />
                 <p className="pane-title">경기장 보정 후 3D 트윈에 연동됩니다</p>
-                <p className="muted">영상에서 경기장 기준점 4 곳 이상을 지정하면<br />카메라 움직임을 따라 모든 프레임의 위치가 계산됩니다.</p>
-                <button className="btn btn-primary" onClick={startCalibration}>
-                  <Icon name="target" size={16} />경기장 보정
-                </button>
+                <p className="muted">자동 보정은 화면의 경기장 라인·센터서클로 기준점 없이 보정합니다.<br />
+                  잘 안 되면 영상에서 기준점 4 곳 이상을 직접 지정하세요.</p>
+                <div className="btn-row">
+                  <button className="btn btn-primary" onClick={handleAutoCalibrate}>
+                    <Icon name="scan" size={16} />자동 보정
+                  </button>
+                  <button className="btn btn-ghost" onClick={startCalibration}>
+                    <Icon name="target" size={16} />직접 지정
+                  </button>
+                </div>
               </div>
             )}
             {analysisMode && calibrated && !twin && (
@@ -807,7 +840,8 @@ function App() {
             <AnalysisCard status={analysis.status} summary={summary} mode={runMode} onMode={setRunMode}
               showBoxes={showBoxes} onToggleBoxes={() => setShowBoxes((s) => !s)}
               showLines={showLines} onToggleLines={() => setShowLines((s) => !s)}
-              onStart={handleStartAnalysis} onCancel={handleCancelAnalysis} onCalibrate={startCalibration} />
+              onStart={handleStartAnalysis} onCancel={handleCancelAnalysis} onCalibrate={startCalibration}
+              onAutoCalibrate={handleAutoCalibrate} />
           )}
 
           {analysisMode && analysis.data?.stats && !calibrating && (

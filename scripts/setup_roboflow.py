@@ -8,8 +8,10 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# .env 파일 로드
-load_dotenv()
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# .env 파일 로드 (프로젝트 루트)
+load_dotenv(PROJECT_ROOT / ".env")
 
 # API 키 확인
 ROBOFLOW_API_KEY = os.getenv("ROBOFLOW_API_KEY")
@@ -57,7 +59,7 @@ DATASETS = [
 ]
 
 # 다운로드 디렉토리 생성 (프로젝트 구조에 맞춤)
-DOWNLOAD_DIR = Path("data/roboflow_datasets")
+DOWNLOAD_DIR = PROJECT_ROOT / "data" / "roboflow_datasets"
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 print(f"\n📂 데이터셋 다운로드 위치: {DOWNLOAD_DIR.absolute()}")
@@ -115,4 +117,4 @@ print("🎉 모든 데이터셋 다운로드가 완료되었습니다!")
 print(f"\n📁 다운로드된 데이터셋은 '{DOWNLOAD_DIR}' 폴더에서 확인하실 수 있습니다.")
 print("\n💡 다음 단계:")
 print("1. configs/model_config.yaml 에서 모델 경로 확인")
-print("2. python -m pipeline.main_pipeline --config configs/model_config.yaml 실행")
+print("2. configs/model_config.yaml 에서 use_roboflow_models: true 로 변경 후 서버 실행")

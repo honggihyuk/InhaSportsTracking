@@ -7,6 +7,10 @@ API 키 설정 후 이 스크립트를 실행하여 데이터셋 다운로드 �
 import sys
 from pathlib import Path
 
+# 프로젝트 루트를 import 경로에 추가 (python scripts/test_roboflow_integration.py 로 실행)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
 def test_imports():
     """기본 임포트 테스트"""
     print("=" * 60)
@@ -39,7 +43,7 @@ def test_env_setup():
     from dotenv import load_dotenv
     import os
     
-    load_dotenv()
+    load_dotenv(PROJECT_ROOT / ".env")
     api_key = os.getenv("ROBOFLOW_API_KEY")
     
     if api_key and api_key != "your_api_key_here":
@@ -161,7 +165,7 @@ def test_detection():
         output = detector.draw_detections(test_image, detections)
         
         # 결과 저장
-        output_path = Path("data/test_detection_result.jpg")
+        output_path = PROJECT_ROOT / "data" / "test_detection_result.jpg"
         output_path.parent.mkdir(exist_ok=True)
         cv2.imwrite(str(output_path), output)
         print(f"\n📸 결과 이미지 저장: {output_path}")

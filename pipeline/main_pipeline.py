@@ -68,7 +68,9 @@ class Soccer3DPipeline:
         self.device = det_config.get('device', 'cpu')  # GPU 가 없을 경우 cpu 로 기본값 변경
         
     def _load_config(self, config_path: str) -> Dict:
-        """설정 파일 로드"""
+        """설정 파일 로드 (상대 경로는 실행 위치에 없으면 프로젝트 루트 기준)"""
+        from tracking.detector import resolve_path
+        config_path = resolve_path(config_path)
         if Path(config_path).exists():
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
@@ -107,7 +109,7 @@ class Soccer3DPipeline:
         영상 분석 설정 (analysis 섹션 + 모드별 profiles 덮어쓰기)
 
         Returns:
-            {mode, stride, img_size, ball_imgsz, ball_tile, postprocess, line_refine}
+            {mode, stride, img_size, ball_imgsz, ball_tile, postprocess, line_refine, auto_calibrate}
         """
         cfg = self.config.get('analysis', {})
         mode = mode or cfg.get('mode', 'realtime')
@@ -122,6 +124,7 @@ class Soccer3DPipeline:
             'ball_tile': None,
             'postprocess': mode == 'precise',
             'line_refine': mode == 'precise',
+            'auto_calibrate': mode == 'precise',
         }
         base.update(profiles.get(mode) or {})
         base['mode'] = mode
@@ -440,9 +443,9 @@ if __name__ == '__main__':
         print(f"\n⚠️ 초기화 중 오류 발생: {e}")
         print("\n💡 실제 사용시에는 다음이 필요합니다:")
         print("   1. Roboflow API 키 설정 (.env 파일)")
-        print("   2. python setup_roboflow.py 실행하여 데이터셋 다운로드")
+        print("   2. python scripts/setup_roboflow.py 실행하여 데이터셋 다운로드")
         print("   3. 또는 configs/model_config.yaml 에서 모델 경로 수정")
         print("\n📝 빠른 시작 가이드:")
         print("   1. .env 파일에 ROBOFLOW_API_KEY 설정")
-        print("   2. python setup_roboflow.py 실행")
+        print("   2. python scripts/setup_roboflow.py 실행")
         print("   3. python -m pipeline.main_pipeline --config configs/model_config.yaml --video <영상경로>")

@@ -56,6 +56,7 @@ analysis:
       ball_tile: null    # 공 타일 추론 끔
       postprocess: false
       line_refine: false
+      auto_calibrate: false
     precise:
       stride: 1          # 매 프레임 탐지 (보간 없음)
       img_size: 960      # 멀리 있는 작은 선수까지
@@ -63,6 +64,7 @@ analysis:
       ball_tile: 640     # 원본 해상도 640 px 타일로 공 추가 탐지 (SAHI 방식)
       postprocess: true  # 트랙 잇기 · 공백 보간 · 공 오탐 제거
       line_refine: true  # 경기장 라인 마스크 저장 → 보정 시 매 프레임 라인 정렬 (누적 오차 제거)
+      auto_calibrate: true  # 분석 직후 경기장 라인·센터서클로 자동 보정 (실패하면 수동 보정 안내)
 
 # Tracking settings
 tracking:

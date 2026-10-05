@@ -4,7 +4,7 @@
 >
 > 이 문서는 **현재 코드 기준**으로 사용 기술, 구현된 기능, 알려진 제약, 향후 구현 계획을 정리합니다. 빠른 실행 방법은 [README](../README.md)를 참고하세요.
 >
-> **다음 문서**: [2부 — 영상 분석 · 경기장 보정 · 3D 트윈 연동](./PROJECT_OVERVIEW_2_VIDEO_ANALYSIS.md) · [3부 — CV 고도화 · VLM 설계](./PROJECT_OVERVIEW_3_VLM.md) · [4부 — 고정밀 분석 모드](./PROJECT_OVERVIEW_4_PRECISE_ANALYSIS.md)
+> **다음 문서**: [2부 — 영상 분석 · 경기장 보정 · 3D 트윈 연동](./PROJECT_OVERVIEW_2_VIDEO_ANALYSIS.md) · [3부 — CV 고도화 · VLM 설계](./PROJECT_OVERVIEW_3_VLM.md) · [4부 — 고정밀 분석 모드](./PROJECT_OVERVIEW_4_PRECISE_ANALYSIS.md) · [5부 — 자동 초기 보정](./PROJECT_OVERVIEW_5_AUTO_CALIBRATION.md)
 
 ---
 
@@ -68,7 +68,7 @@ flowchart LR
 | 3DGS 모델 | `gs_model/` | 3D Gaussian Splatting 표준 공간 및 변형 네트워크 (렌더링 미연동) |
 | 백엔드 | `backend/server.py` | 업로드·영상 제공, 분석 작업·결과·보정 API, WebSocket 스트림 |
 | 프론트엔드 | `frontend/src/` | 영상 플레이어·탐지 박스 오버레이·보정 도구·3D 트윈·통계 UI |
-| 테스트 | `tests/` | 단위·통합 테스트 35 개 |
+| 테스트 | `tests/` | 단위·통합 테스트 (1부 시점 35 개 → 현재 68 개, [테스트 가이드](./guides/TESTING.md)) |
 | 설정 | `configs/` | 모델·분석·추적·경기장 규격 설정 |
 
 ---
@@ -80,7 +80,7 @@ flowchart LR
 | 기술 | 버전 | 사용 위치 | 역할 및 선택 이유 |
 |---|---|---|---|
 | **Ultralytics YOLO11** | 8.4 | `tracking/detector.py` | 객체 탐지. CPU 기본값은 `yolo11n`(선수 640 px, 공 960 px), GPU 에서는 `yolo11s` 권장 |
-| **Roboflow 축구 전문 모델** | — | `setup_roboflow.py`, `scripts/` | 선수·공·경기장 전용 모델. 경로를 지정하면 COCO 범용 모델 대신 사용 |
+| **Roboflow 축구 전문 모델** | — | `scripts/setup_roboflow.py` | 선수·공·경기장 전용 모델. 경로를 지정하면 COCO 범용 모델 대신 사용 |
 | **boxmot BoT-SORT** | 25.0 | `tracking/tracker.py` | 다중 객체 추적. **희소 광류 카메라 움직임 보정(CMC)** 으로 팬·줌하는 중계 화면에서 ID 가 가장 안정적 (아래 비교표) |
 | **OpenCV** | 4.x / 5.0 | 분석 전반 | 광류(`calcOpticalFlowPyrLK`)·호모그래피(`findHomography` RANSAC)·K-means·HSV 잔디 마스크·영상 입출력 |
 | **NumPy** | 2.x | 전반 | IoU 행렬, 호모그래피 합성, 좌표 변환 |
@@ -297,7 +297,7 @@ YOLO·GPU 없이 실행되는 35 개 테스트입니다.
 | 카메라 움직임 추정 · 보정 전파 | 완료 | |
 | **분석 결과 → 3D 트윈 연동** | **완료** | **수동 경기장 보정 필요** |
 | **고정밀 분석 모드** | **완료** | 라인 정렬 보정·트랙 잇기·좌표 평활화·경기 지표 — [4부](./PROJECT_OVERVIEW_4_PRECISE_ANALYSIS.md) |
-| 자동 경기장 보정 | 부분 | 키프레임 이후 매 프레임 라인 자동 정렬 완료, 첫 키프레임은 수동 ([4부 36절](./PROJECT_OVERVIEW_4_PRECISE_ANALYSIS.md#36-한계와-다음-단계)) |
+| **자동 경기장 보정** | **완료** | 기준점 입력 없이 라인·센터서클 기하로 키프레임 검출 + 매 프레임 라인 정렬 — [5부](./PROJECT_OVERVIEW_5_AUTO_CALIBRATION.md) (실제 중계 영상 검증 필요) |
 | 3D Gaussian Splatting 렌더링 | 부분 | 모듈만 존재, `render()` 미구현 |
 
 ---
@@ -315,7 +315,7 @@ YOLO·GPU 없이 실행되는 35 개 테스트입니다.
 | 가려짐 | 선수가 겹치면 탐지가 합쳐지거나 누락, 보간 구간에 없는 트랙은 표시 안 됨 | 탐지 간격 축소(GPU), ReID |
 | 작업 상태 | 진행 중 작업 상태는 메모리에만 있어 서버 재시작 시 사라짐 (완료 결과는 파일로 유지) | 작업 큐/DB |
 | 코덱 | 브라우저는 MPEG-4 Part 2 등을 재생하지 못함 | 업로드 시 H.264 자동 변환 |
-| 보안 | CORS 모든 출처 허용, `.env`(API 키)가 저장소에 커밋되어 있음 | 배포 전 출처 제한, 키 재발급 및 추적 해제 |
+| 보안 | CORS 모든 출처 허용. `.env`(API 키)는 추적 해제했지만 과거 커밋 기록에 남아 있음 | 배포 전 출처 제한, **Roboflow 키 재발급** |
 | 연결 | 백엔드 재시작 시 WebSocket 자동 재연결 없음 | 지수 백오프 재연결 |
 | 파이프라인 CLI | `python -m pipeline.main_pipeline --video` 는 앞 50 프레임만 처리 | 업로드 → 분석 API 사용, 또는 `--max-frames` 인자 추가 |
 | 의존성 | `deck.gl`, `react-markdown` 미사용 | 제거 |
