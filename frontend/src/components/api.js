@@ -153,3 +153,10 @@ export const saveCalibration = (name, keyframes) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ keyframes }),
   });
+/** 분석 결과에 대한 자연어 질의 (로컬 VLM 에이전트) → {answer, frames, steps} */
+export const askMatch = (name, question, history = []) =>
+  requestJson(`${analysisPath(name)}/ask`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question, history }),
+  });

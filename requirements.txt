@@ -14,6 +14,14 @@ numpy>=1.24.0
 torch>=2.0.0
 torchvision>=0.15.0
 
+# GPU 정밀 모델 (3부·6부 문서) — GPU 가 없으면 설치해도 자동으로 쓰지 않음 (설정의 auto)
+# GPU 용 PyTorch 는 먼저 설치: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+rfdetr>=1.11            # RF-DETR 탐지 (Apache 2.0, nano~large)
+transformers>=5.0       # SigLIP2 팀 분류, SAM2.1/SAM3 마스크, Qwen3-VL 질의 에이전트
+accelerate>=1.0
+umap-learn>=0.5         # SigLIP2 임베딩 3차원 축소
+supervision>=0.25       # RF-DETR 출력 형식
+
 # 3D Gaussian Splatting (optional, requires CUDA)
 # diff-gaussian-rasterization @ git+https://github.com/graphdeco-inria/diff-gaussian-rasterization.git
 # simple-knn @ git+https://github.com/graphdeco-inria/simple-knn.git

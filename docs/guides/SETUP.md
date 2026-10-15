@@ -10,7 +10,7 @@
 | Python | 3.11 ~ 3.12 |
 | Node.js | 20 이상 (npm 포함) |
 | ffmpeg | 선택 — 브라우저가 재생하지 못하는 영상 변환용 |
-| GPU | 선택 — 없으면 CPU 로 동작 (`configs/model_config.yaml` 의 `detection.device: cpu`) |
+| GPU | 선택 — `detection.device: auto` 가 GPU 를 자동으로 쓰고, 없으면 CPU 로 동작 |
 
 ## 2. 설치
 
@@ -33,6 +33,11 @@ cd ..
 
 - GPU 가 없는 PC 에서 PyTorch 가 오류(Bus error 등)를 내면 CPU 전용판을 설치합니다:
   `pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu`
+- **GPU(NVIDIA) 가 있으면** PyTorch 를 CUDA 판으로 먼저 설치합니다 (RTX 50 시리즈는 CUDA 12.8):
+  `pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128` → `pip install -r requirements.txt`.
+  설정이 모두 `auto` 라 RF-DETR·SAM3·SigLIP2·Qwen3-VL 이 자동으로 켜집니다 ([6부](../PROJECT_OVERVIEW_6_GPU_MODELS.md)).
+  SAM3 는 [Hugging Face 접근 승인](https://huggingface.co/facebook/sam3) 후 `hf auth login` 이 필요하고, 없으면 SAM2.1 로 대체됩니다.
+  모델 다운로드가 0 바이트에서 멈추면 `HF_HUB_DISABLE_XET=1` 을 설정하세요.
 - YOLO 가중치 `models/yolo11n.pt`, `models/yolo11s.pt` 는 저장소에 포함되어 있습니다 ([모델 가이드](./MODELS.md)).
 - Roboflow 축구 전용 모델은 선택 사항입니다 ([Roboflow 가이드](./ROBOFLOW.md)).
 

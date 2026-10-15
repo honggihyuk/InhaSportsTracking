@@ -8,6 +8,7 @@ import {
 } from './components/api'
 import { VideoOverlay } from './components/VideoOverlay'
 import { CalibrationPanel } from './components/CalibrationPanel'
+import { AskPanel } from './components/AskPanel'
 import { twinFrame, LANDMARKS, BALL_ID } from './analysis'
 import './index.css'
 
@@ -513,8 +514,13 @@ function App() {
     }
   }, [])
 
+  // 첫 화면: 분석이 끝난 영상(저장소 기본 샘플 우선)을 바로 열어 데모 데이터 대신 실제 분석 결과를 보여 준다
   useEffect(() => {
-    listVideos().then(setVideos).catch(() => {})
+    listVideos().then((list) => {
+      setVideos(list)
+      const first = list.find((v) => v.analyzed && v.sample) ?? list.find((v) => v.analyzed)
+      if (first) setSource((cur) => cur ?? first)
+    }).catch(() => {})
   }, [])
 
   // 선택한 영상의 분석 상태·결과 불러오기, 분석 중이면 완료될 때까지 폴링
@@ -847,6 +853,10 @@ function App() {
           {analysisMode && analysis.data?.stats && !calibrating && (
             <MatchStatsCard stats={analysis.data.stats} fps={fps} teamColors={teamColors}
               onSeek={seekTo} currentFrame={videoFrame} />
+          )}
+
+          {analysisMode && !calibrating && (
+            <AskPanel key={source.name} name={source.name} fps={fps} onSeek={seekTo} />
           )}
 
           <section className="card" style={{ '--home': teamColors.home, '--away': teamColors.away }}>

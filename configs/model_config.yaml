@@ -11,9 +11,17 @@ detection:
   # Primary model: YOLO11s (COCO pretrained)
   # Downloaded from Ultralytics official repository
   # Location: models/yolo11s.pt (18.4MB)
-  # CPU 기본값은 yolo11n (선수 탐지율은 비슷하고 약 3 배 빠름). GPU 에서는 yolo11s 권장
+  # YOLO 백엔드일 때 사용. CPU 기본값은 yolo11n (선수 탐지율은 비슷하고 약 3 배 빠름). GPU 에서는 yolo11s 권장
   model_path: "models/yolo11n.pt"
   
+  # 탐지 백엔드: yolo | rfdetr | auto (auto: GPU 가 있고 rfdetr 가 설치되어 있으면 RF-DETR, 아니면 YOLO)
+  backend: auto
+  rfdetr:
+    size: medium               # nano | small | medium | base | large (Apache 2.0)
+    checkpoint: null           # 파인튜닝 가중치 (scripts/train_rfdetr.py). null 이면 COCO 사전학습
+    confidence_threshold: 0.4  # 선수
+    ball_threshold: 0.25       # 공 (작아서 점수가 낮게 나옴)
+
   # Roboflow 전문 모델 사용 여부 (false 이면 기본 YOLO11 사용)
   use_roboflow_models: false
   
@@ -30,7 +38,7 @@ detection:
   confidence_threshold: 0.25
   iou_threshold: 0.45
   img_size: 640
-  device: "cpu"  # GPU 가 없을 경우 "cpu" 사용 (CUDA 없음 오류 방지)
+  device: auto  # auto: GPU(CUDA) 가 있으면 cuda, 없으면 cpu. 직접 "cuda" / "cpu" 지정 가능
   
   # COCO classes relevant for soccer
   # Class 0: person (players, referee, goalkeeper)
@@ -65,6 +73,23 @@ analysis:
       postprocess: true  # 트랙 잇기 · 공백 보간 · 공 오탐 제거
       line_refine: true  # 경기장 라인 마스크 저장 → 보정 시 매 프레임 라인 정렬 (누적 오차 제거)
       auto_calibrate: true  # 분석 직후 경기장 라인·센터서클로 자동 보정 (실패하면 수동 보정 안내)
+      team_classifier: auto # siglip | color | auto (auto: GPU 면 SigLIP2 임베딩, 아니면 유니폼 평균색)
+      sam_refine: auto      # true | false | auto (auto: GPU 면 SAM 마스크로 발 위치 정밀화)
+
+# GPU 정밀 모델 (Hugging Face). 처음 쓸 때 자동 다운로드
+gpu_models:
+  siglip: google/siglip2-base-patch16-224
+  sam: facebook/sam3                 # Hugging Face 접근 승인 + hf auth login 필요
+  sam_fallback: facebook/sam2.1-hiera-large  # SAM3 를 받을 수 없으면 자동으로 사용 (승인 불필요)
+
+# 경기 질의 에이전트 (POST /analysis/{name}/ask)
+agent:
+  provider: local                    # local: transformers 로 Qwen3-VL 직접 실행 | openai: OpenAI 호환 서버
+  model: Qwen/Qwen3-VL-4B-Instruct   # GPU 8~12 GB 는 4B, 24 GB 이상은 8B, CPU 는 2B
+  base_url: http://localhost:8001/v1 # provider: openai 일 때 (vLLM·Ollama·유료 API)
+  api_key_env: OPENAI_API_KEY        # provider: openai 일 때 API 키를 읽을 환경 변수
+  max_steps: 6                       # 도구 호출 반복 상한
+  max_new_tokens: 768
 
 # Tracking settings
 tracking:

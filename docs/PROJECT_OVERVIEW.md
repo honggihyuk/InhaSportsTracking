@@ -4,7 +4,7 @@
 >
 > 이 문서는 **현재 코드 기준**으로 사용 기술, 구현된 기능, 알려진 제약, 향후 구현 계획을 정리합니다. 빠른 실행 방법은 [README](../README.md)를 참고하세요.
 >
-> **다음 문서**: [2부 — 영상 분석 · 경기장 보정 · 3D 트윈 연동](./PROJECT_OVERVIEW_2_VIDEO_ANALYSIS.md) · [3부 — CV 고도화 · VLM 설계](./PROJECT_OVERVIEW_3_VLM.md) · [4부 — 고정밀 분석 모드](./PROJECT_OVERVIEW_4_PRECISE_ANALYSIS.md) · [5부 — 자동 초기 보정](./PROJECT_OVERVIEW_5_AUTO_CALIBRATION.md)
+> **다음 문서**: [2부 — 영상 분석 · 경기장 보정 · 3D 트윈 연동](./PROJECT_OVERVIEW_2_VIDEO_ANALYSIS.md) · [3부 — CV 고도화 · VLM 설계](./PROJECT_OVERVIEW_3_VLM.md) · [4부 — 고정밀 분석 모드](./PROJECT_OVERVIEW_4_PRECISE_ANALYSIS.md) · [5부 — 자동 초기 보정](./PROJECT_OVERVIEW_5_AUTO_CALIBRATION.md) · [6부 — GPU 정밀 모델 · VLM 질의](./PROJECT_OVERVIEW_6_GPU_MODELS.md)
 
 ---
 

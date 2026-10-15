@@ -288,6 +288,7 @@ class SoccerTracker:
         obj.bbox = bbox
         obj.center = center
         obj.confidence = confidence
+        obj.class_id, obj.label = class_id, label  # 탐지 라벨(골키퍼·심판 등)은 프레임마다 바뀔 수 있음
         obj.frames_tracked += 1
         obj.frame_detected = self.frame_count
         obj.trajectory.append(center)

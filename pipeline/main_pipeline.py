@@ -16,6 +16,26 @@ from tracking.homography import HomographyTransformer
 from tracking.coordinate_mapper import CoordinateMapper
 
 
+def cuda_available() -> bool:
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except ImportError:
+        return False
+
+
+def resolve_device(device: Optional[str]) -> str:
+    """'auto' → GPU 가 있으면 'cuda', 없으면 'cpu'"""
+    if device in (None, '', 'auto'):
+        return 'cuda' if cuda_available() else 'cpu'
+    return device
+
+
+def _installed(module: str) -> bool:
+    import importlib.util
+    return importlib.util.find_spec(module) is not None
+
+
 @dataclass
 class FrameData:
     """프레임별 데이터"""
@@ -65,7 +85,7 @@ class Soccer3DPipeline:
         self.frame_count = 0
         # 설정 파일의 detection.device 를 참조하거나, 명시적 device 설정 사용
         det_config = self.config.get('detection', {})
-        self.device = det_config.get('device', 'cpu')  # GPU 가 없을 경우 cpu 로 기본값 변경
+        self.device = resolve_device(det_config.get('device', 'cpu'))  # 'auto' → GPU 가 있으면 cuda
         
     def _load_config(self, config_path: str) -> Dict:
         """설정 파일 로드 (상대 경로는 실행 위치에 없으면 프로젝트 루트 기준)"""
@@ -109,7 +129,8 @@ class Soccer3DPipeline:
         영상 분석 설정 (analysis 섹션 + 모드별 profiles 덮어쓰기)
 
         Returns:
-            {mode, stride, img_size, ball_imgsz, ball_tile, postprocess, line_refine, auto_calibrate}
+            {mode, stride, img_size, ball_imgsz, ball_tile, postprocess, line_refine, auto_calibrate,
+             team_classifier ('siglip' | 'color'), sam_refine (bool)}
         """
         cfg = self.config.get('analysis', {})
         mode = mode or cfg.get('mode', 'realtime')
@@ -128,7 +149,31 @@ class Soccer3DPipeline:
         }
         base.update(profiles.get(mode) or {})
         base['mode'] = mode
+        # GPU 모델 옵션: auto 는 GPU 가 있고 transformers 가 설치되어 있을 때만 켠다
+        gpu = self.device.startswith('cuda') and _installed('transformers')
+        team = base.get('team_classifier', 'color')
+        base['team_classifier'] = ('siglip' if gpu else 'color') if team == 'auto' else team
+        sam = base.get('sam_refine', False)
+        base['sam_refine'] = gpu if sam == 'auto' else bool(sam)
         return base
+
+    def make_team_embedder(self):
+        """SigLIP2 팀 분류 임베더 (모델은 첫 사용 때 로드, 분석기 간에 재사용)"""
+        if getattr(self, '_team_embedder', None) is None:
+            from pipeline.team_embed import SiglipEmbedder
+            models = self.config.get('gpu_models', {}) or {}
+            self._team_embedder = SiglipEmbedder(models.get('siglip', 'google/siglip2-base-patch16-224'),
+                                                 device=self.device)
+        return self._team_embedder
+
+    def make_sam_refiner(self):
+        """SAM 박스 프롬프트 마스크 정밀화 (gpu_models.sam: SAM2.1 또는 SAM3)"""
+        if getattr(self, '_sam_refiner', None) is None:
+            from tracking.sam_refiner import SamRefiner
+            models = self.config.get('gpu_models', {}) or {}
+            self._sam_refiner = SamRefiner(models.get('sam', 'facebook/sam3'), device=self.device,
+                                           fallback=models.get('sam_fallback', 'facebook/sam2.1-hiera-large'))
+        return self._sam_refiner
 
     def initialize_components(self):
         """주입되지 않은 무거운 컴포넌트(탐지기, 3DGS) 초기화"""
@@ -137,13 +182,35 @@ class Soccer3DPipeline:
         self.initialize_detector()
         self._initialize_gaussian()
 
+    def detector_backend(self) -> str:
+        """detection.backend: yolo | rfdetr | auto (auto: GPU 이고 rfdetr 가 설치되어 있으면 rfdetr)"""
+        backend = self.config.get('detection', {}).get('backend', 'yolo')
+        if backend == 'auto':
+            backend = 'rfdetr' if self.device.startswith('cuda') and _installed('rfdetr') else 'yolo'
+        if backend not in ('yolo', 'rfdetr'):
+            raise ValueError(f"지원하지 않는 탐지 백엔드: {backend}")
+        return backend
+
     def initialize_detector(self):
-        """탐지기 초기화 (주입되었으면 그대로 사용) - 설정에 따라 Roboflow 또는 기본 YOLO"""
+        """탐지기 초기화 (주입되었으면 그대로 사용) - 설정에 따라 RF-DETR, Roboflow 또는 기본 YOLO"""
         det_config = self.config.get('detection', {})
         use_roboflow = det_config.get('use_roboflow_models', False)
 
         if self.detector is not None:
             print("✓ 주입된 탐지기 사용")
+        elif self.detector_backend() == 'rfdetr':
+            from tracking.rfdetr_detector import RFDETRDetector
+            rf = det_config.get('rfdetr', {}) or {}
+            self.detector = RFDETRDetector(
+                size=rf.get('size', 'medium'),
+                checkpoint=rf.get('checkpoint'),
+                device=self.device,
+                confidence_threshold=rf.get('confidence_threshold', 0.4),
+                ball_threshold=rf.get('ball_threshold', 0.25),
+                iou_threshold=det_config.get('iou_threshold', 0.45),
+                imgsz=det_config.get('img_size'),
+            )
+            print("✓ RF-DETR 탐지기 사용")
         elif use_roboflow:
             roboflow_models = det_config.get('roboflow_models', {})
             self.detector = RoboflowSoccerDetector(
