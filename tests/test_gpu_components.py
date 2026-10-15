@@ -377,3 +377,36 @@ def test_ask_api(tmp_path, monkeypatch):
         assert r.status_code == 200 and r.json()['answer'] == 'home 60%' and r.json()['frames'] == [0, 60]
         server.analysis_jobs["m.avi"] = {"state": "running"}
         assert c.post("/analysis/m.avi/ask", json={"question": "점유율?"}).status_code == 409
+
+
+# --- 기본 샘플 (분석 완료 데이터) ----------------------------------------------
+def test_repo_sample_matches_its_video():
+    """저장소 샘플: 분석 결과의 해상도·프레임 수가 압축한 영상과 같아야 박스가 영상에 맞는다"""
+    root = Path(__file__).resolve().parent.parent / "data" / "samples"
+    video = root / "sports_video_1.mp4"
+    result = va.load(root / "analysis" / "sports_video_1.mp4.json")
+    cap = cv2.VideoCapture(str(video))
+    assert (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))) == (result['width'], result['height'])
+    assert int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) == result['frame_count'] == len(result['frames'])
+    cap.release()
+
+
+def test_seed_samples_copies_once_and_keeps_user_results(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from backend import server
+    samples, uploads = tmp_path / "samples", tmp_path / "uploads"
+    (samples / "analysis").mkdir(parents=True)
+    (samples / "s.mp4").write_bytes(b"video")
+    (samples / "analysis" / "s.mp4.json").write_text("{}")
+    assert sorted(server.seed_samples(samples, uploads)) == ["analysis/s.mp4.json", "s.mp4"]
+    (uploads / "analysis" / "s.mp4.json").write_text('{"recalibrated": true}')  # 사용자가 다시 보정한 결과
+    assert server.seed_samples(samples, uploads) == []
+    assert "recalibrated" in (uploads / "analysis" / "s.mp4.json").read_text()
+    assert server.seed_samples(tmp_path / "none", uploads) == []
+
+    monkeypatch.setattr(server, "UPLOADS_DIR", uploads)
+    monkeypatch.setattr(server, "ANALYSIS_DIR", uploads / "analysis")
+    monkeypatch.setattr(server, "SAMPLES_DIR", samples)
+    with TestClient(server.app) as c:
+        (info,) = c.get("/videos").json()
+        assert info["name"] == "s.mp4" and info["analyzed"] is True and info["sample"] is True

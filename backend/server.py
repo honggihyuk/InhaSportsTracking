@@ -52,6 +52,8 @@ app.add_middleware(
 # 전역 변수
 pipeline = None
 UPLOADS_DIR = Path(__file__).parent.parent / "uploads"
+# 저장소에 포함된 분석 완료 샘플 (영상 + analysis/{영상}.json·.lines.npz). 서버 시작 시 uploads 로 복사
+SAMPLES_DIR = Path(__file__).parent.parent / "data" / "samples"
 STREAM_INTERVAL = 1 / 30  # 약 30 FPS
 
 # 업로드된 경기 영상 제공 (StaticFiles 는 Range 요청을 지원 → 브라우저 영상 탐색 가능)
@@ -91,7 +93,31 @@ def _video_info(path: Path) -> Dict:
         "url": f"/media/{quote(path.name)}",
         "size": path.stat().st_size,
         "modified": path.stat().st_mtime,
+        "analyzed": _analysis_file(path.name).is_file(),     # 분석 결과가 있으면 화면이 바로 보여 줌
+        "sample": (SAMPLES_DIR / path.name).is_file(),      # 저장소에 포함된 기본 샘플
     }
+
+
+def seed_samples(samples: Path, uploads: Path) -> List[str]:
+    """
+    저장소의 분석 완료 샘플을 uploads 로 복사 (이미 있는 파일은 건드리지 않음 — 다시 분석·보정한 결과 보존)
+
+    처음 실행해도 영상을 다시 분석하지 않고 바로 결과를 볼 수 있게 한다.
+    Returns: 새로 복사한 파일 이름 목록
+    """
+    if not samples.is_dir():
+        return []
+    copied = []
+    for src in sorted(samples.rglob("*")):
+        if not src.is_file():
+            continue
+        dst = uploads / src.relative_to(samples)
+        if dst.exists():
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        copied.append(str(src.relative_to(samples).as_posix()))
+    return copied
 
 
 # 라우트 정의
@@ -663,6 +689,11 @@ def generate_dummy_tracking_data(frame: int) -> Dict:
 async def startup_event():
     """서버 시작 시 초기화 작업"""
     print("🚀 Soccer 3D Digital Twin 서버 시작...")
+    import os
+    if os.environ.get("SOCCER_SEED_SAMPLES", "1") != "0":
+        copied = seed_samples(SAMPLES_DIR, UPLOADS_DIR)
+        if copied:
+            print(f"📦 분석 완료 샘플 등록: {', '.join(copied)}")
     # 필요시 파이프라인 미리 초기화
     # config_path = Path(__file__).parent.parent / "configs" / "model_config.yaml"
     # global pipeline

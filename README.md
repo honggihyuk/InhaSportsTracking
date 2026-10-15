@@ -76,6 +76,7 @@ InhaSportsTracking/                 ← 모든 명령은 여기(저장소 루트
 │   ├── PROJECT_OVERVIEW*.md        # 기술·기능 명세 1~6부
 │   └── guides/                     # 설치·실행, 모델, Roboflow, 테스트, 프론트엔드 가이드
 ├── data/raw/                       # 샘플 영상
+├── data/samples/                   # 분석 완료 기본 샘플 (영상 10 MB + 분석 결과) — 서버 시작 시 uploads 로 복사
 ├── uploads/                        # 업로드 영상·분석 결과 (git 제외, 서버가 자동 생성)
 ├── .env.example                    # Roboflow API 키 템플릿 (.env 로 복사, git 제외)
 └── requirements.txt
@@ -106,6 +107,8 @@ npm run dev
 ```
 
 브라우저에서 `http://localhost:5173` 에 접속합니다.
+
+> 처음 실행하면 저장소에 포함된 **분석 완료 샘플**(`data/samples/` — 레알 마드리드–바르셀로나 중계 35 초, RF-DETR·SAM3·SigLIP2 고정밀 분석 결과)이 `uploads/` 로 복사되고, 첫 화면에서 바로 열립니다. 다시 분석하지 않아도 탐지 박스·3D 트윈·경기 지표·경기 질의를 볼 수 있습니다. 영상은 같은 1080p·1,054 프레임을 유지한 채 H.264 로 다시 압축했습니다(92 MB → 10 MB). `uploads/` 에 같은 이름의 파일이 이미 있으면 덮어쓰지 않으며, `SOCCER_SEED_SAMPLES=0` 이면 복사하지 않습니다.
 
 ### 3. 사용
 
