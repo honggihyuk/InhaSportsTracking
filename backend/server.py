@@ -269,9 +269,20 @@ def _run_analysis(name: str, mode: Optional[str] = None):
         tracker = p.make_tracker()  # 영상마다 추적 ID 를 새로 시작
         tracker.ball_tracker = BallTracker(max_jump=60 * stride)  # 탐지 간격만큼 공 이동 허용 범위 확대
         lines = LineMaskStore((0, 0)) if profile.get("line_refine") else None
-        result = video_analysis.analyze_video(
-            _video_file(name), det, tracker, stride=stride, mode=profile["mode"],
-            line_store=lines, postprocess=profile.get("postprocess"), progress=progress)
+        # GPU 정밀 모델 (SigLIP2 팀 분류, SAM 마스크) — 분석이 끝나면 VRAM 을 돌려준다
+        embedder = p.make_team_embedder() if profile.get("team_classifier") == "siglip" else None
+        refiner = p.make_sam_refiner() if profile.get("sam_refine") else None
+        if embedder is not None or refiner is not None:
+            _release_agent()  # 질의용 VLM 이 GPU 를 잡고 있으면 먼저 내림
+        try:
+            result = video_analysis.analyze_video(
+                _video_file(name), det, tracker, stride=stride, mode=profile["mode"],
+                line_store=lines, postprocess=profile.get("postprocess"), progress=progress,
+                team_embedder=embedder, refiner=refiner)
+        finally:
+            for m in (embedder, refiner):
+                if m is not None:
+                    m.unload()
         _lines_file(name).unlink(missing_ok=True)
         if lines is not None and len(lines):
             ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
@@ -454,6 +465,66 @@ def get_stats(name: str):
     if stats is None:
         raise HTTPException(status_code=404, detail="경기 지표가 없습니다. 경기장 보정을 먼저 저장하세요.")
     return stats
+
+
+# ---------------------------------------------------------------------------
+# 경기 질의 (VLM 에이전트, 3부 22절) — 분석 결과를 도구로 로컬 Qwen3-VL 이 답한다
+# ---------------------------------------------------------------------------
+agent_executor = ThreadPoolExecutor(max_workers=1)  # GPU 모델 하나를 순서대로 사용
+agent_llm = None
+
+
+class AskRequest(BaseModel):
+    question: str
+    history: List[Dict] = []  # 이전 대화 [{role: user|assistant, content: str}] (선택)
+
+
+def _agent_config() -> Dict:
+    import yaml
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def _release_agent():
+    """분석 작업이 GPU 를 쓰기 전에 질의 모델을 내림 (다음 질문 때 다시 로드)"""
+    global agent_llm
+    if agent_llm is not None:
+        agent_llm.unload()
+        agent_llm = None
+
+
+def _ask(name: str, body: AskRequest) -> Dict:
+    global agent_llm
+    from agent.runner import MatchAgent, make_llm
+    from agent.tools import MatchTools
+    from pipeline import video_analysis
+    from pipeline.main_pipeline import resolve_device
+
+    cfg = _agent_config()
+    if agent_llm is None:
+        agent_llm = make_llm(cfg.get("agent", {}), device=resolve_device(cfg.get("detection", {}).get("device")))
+    result = video_analysis.load(_analysis_file(name))
+    agent = MatchAgent(agent_llm, MatchTools(result, _video_file(name)),
+                       max_steps=int((cfg.get("agent") or {}).get("max_steps", 6)))
+    history = [{"role": h["role"], "content": str(h["content"])} for h in body.history[-6:]
+               if h.get("role") in ("user", "assistant") and h.get("content")]
+    return agent.ask(body.question, history)
+
+
+@app.post("/analysis/{name}/ask")
+def ask_match(name: str, body: AskRequest):
+    """분석 결과에 대한 자연어 질의 → {answer, steps(도구 호출 기록), frames(근거 프레임)}"""
+    _video_file(name)
+    if not _analysis_file(name).is_file():
+        raise HTTPException(status_code=404, detail="분석 결과가 없습니다. 먼저 영상을 분석하세요.")
+    if not body.question.strip():
+        raise HTTPException(status_code=400, detail="질문을 입력하세요.")
+    if any(j.get("state") in ("queued", "running") for j in analysis_jobs.values()):
+        raise HTTPException(status_code=409, detail="영상 분석 중에는 질의할 수 없습니다 (GPU 사용 중).")
+    try:
+        return agent_executor.submit(_ask, name, body).result()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"질의 실패: {e}")
 
 
 @app.get("/process_frame/{frame_number}")

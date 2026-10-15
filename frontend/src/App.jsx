@@ -8,6 +8,7 @@ import {
 } from './components/api'
 import { VideoOverlay } from './components/VideoOverlay'
 import { CalibrationPanel } from './components/CalibrationPanel'
+import { AskPanel } from './components/AskPanel'
 import { twinFrame, LANDMARKS, BALL_ID } from './analysis'
 import './index.css'
 
@@ -847,6 +848,10 @@ function App() {
           {analysisMode && analysis.data?.stats && !calibrating && (
             <MatchStatsCard stats={analysis.data.stats} fps={fps} teamColors={teamColors}
               onSeek={seekTo} currentFrame={videoFrame} />
+          )}
+
+          {analysisMode && !calibrating && (
+            <AskPanel key={source.name} name={source.name} fps={fps} onSeek={seekTo} />
           )}
 
           <section className="card" style={{ '--home': teamColors.home, '--away': teamColors.away }}>

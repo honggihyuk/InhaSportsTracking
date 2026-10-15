@@ -12,7 +12,8 @@
 
 ### 핵심 기술 스택
 
-- **Object Detection**: YOLO11 + Roboflow 축구 전문 모델
+- **Object Detection**: RF-DETR (GPU) · YOLO11 (CPU) + Roboflow 축구 전문 모델
+- **GPU 정밀 모델**: SAM3 마스크(발 위치) · SigLIP2 팀 분류 · Qwen3-VL 경기 질의 에이전트 — [6부 문서](./docs/PROJECT_OVERVIEW_6_GPU_MODELS.md)
 - **Tracking**: BoT-SORT + 카메라 움직임 보정 (boxmot), 공 전용 BallTracker
 - **Camera Motion / Calibration**: 광류 기반 프레임 간 호모그래피 + 키프레임 경기장 보정 전파
 - **Coordinate Mapping**: Homography (픽셀 → 경기장 미터 좌표)
@@ -28,6 +29,8 @@
 4. **3D 디지털 트윈 연동**: 분석·보정된 선수·공 위치를 영상과 같은 프레임으로 3D 재현 (자유 시점 / 탑다운 / 선수 시점)
 5. **통계**: 팀별 선수 수·평균/최고 속도, 볼 소유, 공 속도·위치
 6. **고정밀 분석 모드 (기본)**: 매 프레임 탐지 + 공 타일 탐지, 끊긴 트랙 잇기·가려진 구간 보간, **경기장 라인 정렬로 보정 누적 오차 제거**, 좌표 칼만+RTS 평활화, 골키퍼 판정, 경기 지표(거리·스프린트·점유율·패스·대형·히트맵) — [4부 문서](./docs/PROJECT_OVERVIEW_4_PRECISE_ANALYSIS.md)
+7. **GPU 가 있으면 자동으로**: RF-DETR 탐지(공 검출 2.3 배), SAM3 마스크로 발 위치 정밀화, SigLIP2 임베딩 팀 분류(심판·골키퍼 분리) — 설정은 모두 `auto`, GPU 가 없으면 기존 방식
+8. **경기 질의 (VLM)**: "가장 많이 뛴 선수는?" 같은 질문에 로컬 Qwen3-VL 이 분석 데이터·영상 프레임을 도구로 조회해 답하고, 근거 시점을 누르면 그 장면으로 이동 — [6부 문서](./docs/PROJECT_OVERVIEW_6_GPU_MODELS.md)
 
 ---
 
@@ -41,14 +44,18 @@ InhaSportsTracking/                 ← 모든 명령은 여기(저장소 루트
 │   ├── video_analysis.py           # 분석 작업(탐지·추적·카메라 움직임·팀), 보정 전파·저장
 │   ├── pitch.py                    # 경기장 라인 모델·라인 검출·라인 정렬 보정
 │   ├── autocalib.py                # 자동 초기 보정 (기준점 입력 없이)
+│   ├── team_embed.py               # SigLIP2 + UMAP + K-Means 팀 분류
 │   ├── postprocess.py              # 트랙 잇기·보간·공 정리·좌표 평활화·골키퍼
 │   ├── synthetic.py                # 정답이 있는 합성 중계 영상 (테스트·벤치마크)
 │   └── main_pipeline.py            # 설정 기반 파이프라인, 분석 모드 프로필, CLI
 ├── tracking/                       # 탐지·추적·좌표 변환
 │   ├── detector.py                 # YOLO 탐지(Detection), 공 타일 추론, 모델 경로 해석
 │   ├── tracker.py                  # BoT-SORT/ByteTrack/Simple, BallTracker, SoccerTracker
+│   ├── rfdetr_detector.py          # RF-DETR 탐지 백엔드 (GPU)
+│   ├── sam_refiner.py              # SAM3/SAM2.1 박스 프롬프트 마스크 → 발 위치
 │   ├── homography.py
 │   └── coordinate_mapper.py
+├── agent/                          # 경기 질의 에이전트 (Qwen3-VL, 도구 8 개, OpenAI 호환 서버 전환)
 ├── analysis/
 │   └── stats.py                    # 경기 지표 (거리·스프린트·점유율·패스·대형·히트맵)
 ├── gs_model/                       # 3D Gaussian Splatting 모듈 (렌더링 미연동)
@@ -58,14 +65,15 @@ InhaSportsTracking/                 ← 모든 명령은 여기(저장소 루트
 │   └── field_dimensions.yaml       # 경기장 규격
 ├── models/                         # YOLO11 가중치 (yolo11n.pt, yolo11s.pt)
 ├── scripts/                        # 실행용 스크립트
+│   ├── train_rfdetr.py             # RF-DETR 축구 데이터셋 파인튜닝
 │   ├── benchmark_precise.py        # 분석 모드·자동 보정 정량 비교
 │   ├── setup_roboflow.py           # Roboflow 데이터셋 다운로드
 │   ├── download_roboflow_datasets.py
 │   ├── test_roboflow_integration.py
 │   └── sample_test.py              # 모듈 점검 + 샘플 영상 생성
-├── tests/                          # pytest (68 개)
+├── tests/                          # pytest (89 개)
 ├── docs/
-│   ├── PROJECT_OVERVIEW*.md        # 기술·기능 명세 1~5부
+│   ├── PROJECT_OVERVIEW*.md        # 기술·기능 명세 1~6부
 │   └── guides/                     # 설치·실행, 모델, Roboflow, 테스트, 프론트엔드 가이드
 ├── data/raw/                       # 샘플 영상
 ├── uploads/                        # 업로드 영상·분석 결과 (git 제외, 서버가 자동 생성)
@@ -106,7 +114,7 @@ npm run dev
 3. **경기장 보정** — 고정밀 분석은 끝나면 **자동으로 보정**합니다. 빠른 미리보기 결과는 **자동 보정** 버튼을 누르세요. 자동 보정이 안 되는 구간은 **기준점 직접 지정**: 오른쪽 도면에서 기준점(코너, 페널티박스 모서리, 센터서클과 하프라인 교점 등)을 고르고 영상에서 같은 지점을 클릭합니다 (한 직선 위에 있지 않은 4 점 이상).
 4. 탐지 박스·3D 트윈·**경기 지표**(점유율·거리·스프린트·패스, 이벤트 클릭 시 해당 장면으로 이동)가 영상과 같은 타임라인으로 재생됩니다. **보정된 경기장 라인 표시**로 보정 정확도를 눈으로 확인할 수 있습니다.
 
-> CPU 에서는 분석이 영상 길이의 수십 배 걸립니다 (빠른 미리보기 약 1 초/프레임, 고정밀은 그 이상). GPU 가 있으면 `detection.device: cuda` 를 권장합니다.
+> CPU 에서는 분석이 영상 길이의 수십 배 걸립니다 (빠른 미리보기 약 1 초/프레임, 고정밀은 그 이상). GPU 가 있으면 `detection.device: auto` 가 자동으로 GPU 를 쓰고, RF-DETR·SAM3·SigLIP2 정밀 모델도 켜집니다 (RTX 5070 에서 35 초 1080p 영상 약 8 분). GPU 설치는 [6부 50절](./docs/PROJECT_OVERVIEW_6_GPU_MODELS.md#50-설치--설정).
 
 > 브라우저가 재생할 수 있는 **H.264(MP4)** 또는 **VP9/AV1(WebM)** 영상을 사용하세요: `ffmpeg -i input.mp4 -c:v libx264 -c:a aac -movflags +faststart output.mp4`
 
@@ -224,6 +232,7 @@ tracking:
 - **[docs/PROJECT_OVERVIEW_3_VLM.md](./docs/PROJECT_OVERVIEW_3_VLM.md)**: 컴퓨터 비전 고도화(RF-DETR·SAM3·SigLIP2·GLM-OCR)와 로컬 VLM 분석 층 조사·설계 (3부)
 - **[docs/PROJECT_OVERVIEW_4_PRECISE_ANALYSIS.md](./docs/PROJECT_OVERVIEW_4_PRECISE_ANALYSIS.md)**: 고정밀 분석 모드 — 라인 정렬 보정·오프라인 후처리·경기 지표 구현과 정량 비교 (4부)
 - **[docs/PROJECT_OVERVIEW_5_AUTO_CALIBRATION.md](./docs/PROJECT_OVERVIEW_5_AUTO_CALIBRATION.md)**: 자동 초기 보정 — 기준점 입력 없이 경기장 라인·센터서클 기하로 보정 (5부)
+- **[docs/PROJECT_OVERVIEW_6_GPU_MODELS.md](./docs/PROJECT_OVERVIEW_6_GPU_MODELS.md)**: GPU 정밀 모델 — RF-DETR · SAM3 · SigLIP2 · Qwen3-VL 질의 에이전트 구현과 실측 (6부)
 
 **가이드** (`docs/guides/`)
 
@@ -245,10 +254,12 @@ tracking:
 - ✅ 고정밀 분석 모드 — 경기장 라인 정렬 보정, 트랙 잇기·보간, 좌표 평활화, 골키퍼 판정
 - ✅ 경기 지표 — 이동 거리·스프린트·점유율·패스/턴오버·팀 대형·히트맵 (`/analysis/{영상}/stats`)
 - ✅ 자동 경기장 보정 — 기준점 입력 없이 라인·센터서클 기하로 키프레임 검출, 교차 검증 (`/analysis/{영상}/calibration/auto`)
-- ✅ 단위·통합 테스트 (68 개)
+- ✅ GPU 정밀 모델 — RF-DETR 탐지 · SAM3 발 위치 · SigLIP2 팀 분류 (`auto`: GPU 일 때만)
+- ✅ 경기 질의 에이전트 — 로컬 Qwen3-VL + 도구 8 개, 웹 질의 패널 (`/analysis/{영상}/ask`)
+- ✅ 단위·통합 테스트 (89 개)
 - 🔶 3D Gaussian Splatting — 표준 공간·변형 MLP 모듈만 구현, 렌더링 미연동
-- ⏳ 경기장 키포인트 모델(자동 보정 가속) · 공 전용 탐지 모델 · GPU 추론
-- ⏳ 히트맵·패스 네트워크 화면 표시 (데이터는 생성됨) · VLM 질의 층
+- ⏳ 경기장 키포인트 모델(자동 보정 가속) · RF-DETR 축구 데이터 파인튜닝(`scripts/train_rfdetr.py`) · SAM3 영상 추적
+- ⏳ 히트맵·패스 네트워크 화면 표시 (데이터는 생성됨) · 등번호 신원(GLM-OCR)
 - ⏳ SMPL 포즈 복원
 
 자세한 로드맵은 [향후 구현 계획](./docs/PROJECT_OVERVIEW.md#6-향후-구현-계획)을 참고하세요.

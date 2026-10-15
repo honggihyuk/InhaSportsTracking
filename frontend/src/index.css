@@ -466,3 +466,19 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
 /* ---------- 자동 보정 ---------- */
 .warn-text { margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: #F5A524; }
 .btn-row { display: flex; gap: 8px; justify-content: center; }
+
+/* 경기 질의 (VLM) */
+.ask-examples { display: flex; flex-wrap: wrap; gap: 6px; }
+.ask-log { list-style: none; margin: 8px 0 0; padding: 0; max-height: 320px; overflow-y: auto; }
+.ask-log li + li { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.ask-q { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text); }
+.ask-a { margin: 0; font-size: 13px; line-height: 1.6; color: var(--text-2); white-space: pre-wrap; }
+.ask-frames { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.ask-steps { margin: 6px 0 0; font-size: 11px; }
+.ask-form { display: flex; gap: 8px; margin-top: 12px; }
+.ask-form input {
+  flex: 1; min-width: 0; padding: 7px 10px; border-radius: var(--radius-sm);
+  background: var(--surface-2); border: 1px solid var(--line-strong); font-size: 13px;
+}
+.ask-form input:focus { outline: none; border-color: var(--accent); }
+.ask-a strong { color: var(--text); font-weight: 600; }

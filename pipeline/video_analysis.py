@@ -18,10 +18,13 @@ import numpy as np
 
 from tracking.tracker import SoccerTracker
 
+from .team_embed import jersey_crop
+
 KIND_PLAYER, KIND_BALL = 0, 1
 MOTION_SCALE = 0.5          # 카메라 움직임 추정 해상도 배율 (1080p → 540p)
 TEAM_SAMPLE_EVERY = 3       # 트랙별 유니폼 색 샘플 간격 (프레임)
 TEAM_MAX_SAMPLES = 40
+TEAM_MAX_CROPS = 16         # 트랙별 SigLIP2 팀 분류 크롭 수
 PITCH_MARGIN = 5.0          # m, 경기장 밖 이 거리까지는 유효 좌표로 인정 (라인 밖 스로인 등)
 HALF_LENGTH, HALF_WIDTH = 52.5, 34.0
 
@@ -146,7 +149,8 @@ def interpolate_objects(a: List[list], b: List[list], alpha: float) -> List[list
 def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
                   progress: Callable[[int, int], None] = lambda done, total: None,
                   max_frames: Optional[int] = None, stride: int = 1, mode: str = 'realtime',
-                  line_store=None, postprocess: Optional[bool] = None) -> Dict:
+                  line_store=None, postprocess: Optional[bool] = None,
+                  team_embedder=None, refiner=None) -> Dict:
     """
     영상 전체를 분석해 결과 dict 반환
 
@@ -160,6 +164,10 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
         line_store: pitch.LineMaskStore — 주면 프레임별 경기장 라인 마스크를 함께 만든다
                     (보정 시 라인 정렬로 누적 오차 제거에 사용)
         postprocess: 트랙 잇기·공백 보간·공 오탐 제거 (None 이면 precise 일 때만)
+        team_embedder: 크롭 목록 → 임베딩 (pipeline.team_embed.SiglipEmbedder). 주면 평균색 대신
+                       SigLIP2 + UMAP + K-Means 로 팀을 나눈다 (실패하면 평균색으로 대체)
+        refiner: tracking.sam_refiner.SamRefiner. 주면 선수 박스마다 SAM 마스크로 발 위치를 구해
+                 객체 끝에 [.., 신뢰도, 발 x, 발 y] 로 붙인다 (경기장 좌표 계산에 사용)
     """
     from . import pitch as pitch_lines
 
@@ -178,6 +186,9 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
     frames: List[Optional[List[list]]] = []
     motion: List[Optional[list]] = []
     track_colors: Dict[int, List[np.ndarray]] = {}
+    track_crops: Dict[int, List[np.ndarray]] = {}
+    track_labels: Dict[int, Dict[str, int]] = {}
+    sam_feet = 0
     prev_gray, prev_boxes = None, []
     last_key = None  # 마지막 탐지 프레임 인덱스
     try:
@@ -195,15 +206,37 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
                 detections = [d for d in detector.detect(frame)
                               if (plausible_ball(d.bbox) if d.is_ball else on_grass(grass, d.bbox, MOTION_SCALE))]
                 objs = []
-                for o in tracker.update(detections, frame):
+                tracked = tracker.update(detections, frame)
+                sample = idx % (TEAM_SAMPLE_EVERY * stride) == 0
+                players = [o for o in tracked if o.track_id != tracker.BALL_TRACK_ID]
+                masks = {}
+                if refiner is not None and players:
+                    for o, r in zip(players, refiner.refine(frame, [o.bbox for o in players],
+                                                            return_masks=sample and team_embedder is not None)):
+                        masks[o.track_id] = r
+                for o in tracked:
                     kind = KIND_BALL if o.track_id == tracker.BALL_TRACK_ID else KIND_PLAYER
-                    objs.append([o.track_id, kind, *map(int, o.bbox), round(float(o.confidence), 2)])
-                    if kind == KIND_PLAYER and idx % (TEAM_SAMPLE_EVERY * stride) == 0:
+                    obj = [o.track_id, kind, *map(int, o.bbox), round(float(o.confidence), 2)]
+                    m = masks.get(o.track_id)
+                    if m is not None and m.foot is not None:
+                        obj += list(m.foot)
+                        sam_feet += 1
+                    objs.append(obj)
+                    if kind != KIND_PLAYER:
+                        continue
+                    votes = track_labels.setdefault(o.track_id, {})
+                    votes[o.label] = votes.get(o.label, 0) + 1
+                    if sample:
                         samples = track_colors.setdefault(o.track_id, [])
                         if len(samples) < TEAM_MAX_SAMPLES:
                             c = torso_color(frame, o.bbox)
                             if c is not None:
                                 samples.append(c)
+                        crops = track_crops.setdefault(o.track_id, [])
+                        if team_embedder is not None and len(crops) < TEAM_MAX_CROPS:
+                            crop = jersey_crop(frame, o.bbox, m.mask if m is not None else None)
+                            if crop is not None:
+                                crops.append(crop)
                 frames.append(objs)
                 if last_key is not None:  # 직전 탐지 프레임과의 사이를 보간으로 채움
                     for j in range(last_key + 1, idx):
@@ -227,13 +260,28 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
     if postprocess:
         from . import postprocess as pp
         stitched = pp.stitch_tracks(frames, motion, fps, track_colors)
+        for child, root in stitched.items():  # 이어 붙인 트랙의 크롭·라벨도 대표 ID 로 합침
+            track_crops.setdefault(root, []).extend(track_crops.pop(child, []))
+            merged = track_labels.setdefault(root, {})
+            for label, n in track_labels.pop(child, {}).items():
+                merged[label] = merged.get(label, 0) + n
         dropped = pp.clean_ball(frames, motion, fps)
         filled = pp.fill_gaps(frames, motion, int(round(1.5 * fps)), pp.KIND_PLAYER)
         filled_ball = pp.fill_gaps(frames, motion, int(round(0.7 * fps)), pp.KIND_BALL)
         post = {'stitched': len(stitched), 'ball_outliers': dropped,
                 'filled_boxes': filled, 'filled_ball': filled_ball}
 
-    teams, team_colors = cluster_teams(track_colors)
+    teams, team_colors, team_info = None, None, {'method': 'color'}
+    if team_embedder is not None:
+        from .team_embed import classify_teams
+        try:
+            teams, team_colors, team_info = classify_teams(track_crops, team_embedder, track_colors, track_labels)
+            teams = {**{t: 'other' for t in track_colors}, **teams}
+        except Exception as e:  # 모델 로드 실패 등 → 평균색으로 대체
+            print(f"SigLIP2 팀 분류 실패, 평균색으로 대체: {e}")
+            teams, team_info = None, {'method': 'color', 'fallback': str(e)}
+    if teams is None:
+        teams, team_colors = cluster_teams(track_colors)
     return {
         'version': 2,
         'mode': mode,
@@ -248,6 +296,8 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
         'motion': motion,
         'teams': {str(k): v for k, v in teams.items()},
         'team_colors': team_colors,
+        'team_method': team_info,
+        'sam': None if refiner is None else {'model': getattr(refiner, 'model_id', None), 'feet': sam_feet},
         'calibration': None,
         'world': None,
     }
@@ -309,6 +359,13 @@ def frame_homographies(motion: List[Optional[list]], keyframes: Dict[int, np.nda
     return H
 
 
+def object_ground_point(o: list) -> Tuple[float, float]:
+    """객체의 지면 접점: SAM 발 위치(o[7:9])가 있으면 그것, 없으면 박스 하단 중앙"""
+    if len(o) >= 9:
+        return float(o[7]), float(o[8])
+    return ground_point(*o[2:6])
+
+
 def ground_point(x1: int, y1: int, x2: int, y2: int) -> Tuple[float, float]:
     """경기장 평면에 닿는 지점: 선수는 발(박스 하단 중앙), 공도 하단 중앙(지면 가정)"""
     return (x1 + x2) / 2, float(y2)
@@ -354,7 +411,7 @@ def calibrate(result: Dict, keyframe_points: List[Dict], line_masks=None, smooth
         # 화면 가장자리에 잘린 선수 박스는 발 위치(하단 중앙)가 틀리므로 제외 — 속력이 튀는 주원인
         objs = [o for o in objs or [] if o[1] == KIND_BALL or not clipped_by_border(o, result.get('width'), result.get('height'))]
         if objs:
-            pts = np.float32([ground_point(*o[2:6]) for o in objs]).reshape(-1, 1, 2)
+            pts = np.float32([object_ground_point(o) for o in objs]).reshape(-1, 1, 2)
             for o, (x, y) in zip(objs, cv2.perspectiveTransform(pts, H).reshape(-1, 2)):
                 if abs(x) <= HALF_LENGTH + PITCH_MARGIN and abs(y) <= HALF_WIDTH + PITCH_MARGIN:
                     entries.append([o[0], round(float(x), 2), round(float(y), 2)])
