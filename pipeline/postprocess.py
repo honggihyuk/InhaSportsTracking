@@ -8,7 +8,7 @@
   - fill_gaps     : 같은 트랙의 짧은 공백을 카메라 움직임을 따라 보간 (선수·공)
   - clean_ball    : 궤적에서 튀는 공 오탐 제거
   - smooth_world  : 경기장 좌표를 등속 칼만 필터 + RTS 역방향 평활화 → 위치·속도 안정화
-  - assign_goalkeepers : 'other' 중 골문 앞에 머무는 트랙을 골키퍼로, 그 골문을 지키는 팀에 배정
+  - assign_goalkeepers : 'other' 중 골문 앞에 머무는(또는 탐지 모델이 골키퍼로 본) 트랙을 골키퍼로, 그 골문을 지키는 팀에 배정
 
 카메라 움직임 체인: motion[t] = M_t (t-1 → t 프레임 픽셀), None 이면 장면 전환(구간 경계).
 """
@@ -332,12 +332,16 @@ def smooth_world(world: List[Optional[List[list]]], fps: float, ball_id: int = 0
 # 골키퍼
 # ---------------------------------------------------------------------------
 def assign_goalkeepers(world: List[Optional[List[list]]], teams: Dict[str, str], fps: float,
-                       min_seconds: float = 1.0) -> Dict[str, str]:
+                       labels: Optional[Dict[str, str]] = None, min_seconds: float = 1.0) -> Dict[str, str]:
     """
     'other' 트랙 중 대부분의 시간을 한쪽 페널티 박스 안에서 보낸 트랙을 골키퍼로 판정하고,
     그 골문 쪽에 평균 위치(무게중심)가 더 가까운 팀에 배정 (roboflow/sports 방식).
-    teams 를 제자리 수정하고 {track_id: 'goalkeeper'} 역할 표를 반환한다.
+    teams 를 제자리 수정하고 {track_id: 'goalkeeper' | 'referee'} 역할 표를 반환한다.
+
+    labels: 트랙별 탐지 라벨 다수결 (축구 전용 탐지 모델). 'goalkeeper' 트랙은 페널티 박스 조건 없이
+            경기장 어느 쪽 반에 있는지만으로 팀에 배정하고, 'referee' 트랙은 'other' 로 두고 역할만 기록한다.
     """
+    labels = labels or {}
     pos: Dict[str, List[Tuple[float, float]]] = {}
     for entries in world:
         for e in entries or []:
@@ -347,9 +351,25 @@ def assign_goalkeepers(world: List[Optional[List[list]]], teams: Dict[str, str],
         xs = [x for tid, ps in pos.items() if teams.get(tid) == team for x, _ in ps]
         if xs:
             cent[team] = float(np.mean(xs))
-    roles = {}
+    roles = {tid: 'referee' for tid, lab in labels.items() if lab == 'referee' and teams.get(tid, 'other') == 'other'}
     if len(cent) < 2:
         return roles
+    for tid, ps in pos.items():
+        if teams.get(tid) != 'other' or tid == '0' or tid in roles:
+            continue
+        detected_gk = labels.get(tid) == 'goalkeeper'
+        if len(ps) < (0.3 if detected_gk else min_seconds) * fps:
+            continue
+        p = np.array(ps)
+        side = np.sign(np.median(p[:, 0]))
+        in_box = (side * p[:, 0] >= 52.5 - 16.5 - 2) & (np.abs(p[:, 1]) <= 20.16 + 2)
+        if side == 0 or (not detected_gk and in_box.mean() < 0.7):
+            continue
+        goal_x = side * 52.5
+        team = min(cent, key=lambda k: abs(cent[k] - goal_x))
+        teams[tid] = team
+        roles[tid] = 'goalkeeper'
+    return roles
     for tid, ps in pos.items():
         if teams.get(tid) != 'other' or tid == '0' or len(ps) < min_seconds * fps:
             continue

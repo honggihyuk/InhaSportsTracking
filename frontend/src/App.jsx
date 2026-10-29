@@ -230,7 +230,8 @@ function Scene({ players, ball, cameraMode, teamColors }) {
       <FootballField />
       {players
         .filter((p) => !(cameraMode === 'player' && p === followed)) // 시점 선수 자신은 숨김
-        .map((p) => <PlayerMarker key={p.id} player={p} color={teamColors[p.team] ?? teamColors.other} />)}
+        .map((p) => <PlayerMarker key={p.id} player={p}
+          color={(p.role === 'referee' && teamColors.referee) || (teamColors[p.team] ?? teamColors.other)} />)}
       {ball && <BallMarker ball={ball} />}
       <OrbitControls makeDefault enabled={cameraMode !== 'player'} enableDamping
         maxPolarAngle={Math.PI / 2.15} minDistance={20} maxDistance={260} />
@@ -246,6 +247,7 @@ function possessionTeam(players, ball) {
   let best = null
   let bestDist = POSSESSION_RADIUS
   for (const p of players) {
+    if (p.role === 'referee') continue // 심판은 점유 판정에서 제외
     const d = Math.hypot(p.position_3d[0] - bx, p.position_3d[1] - by)
     if (d <= bestDist) [best, bestDist] = [p, d]
   }
@@ -457,7 +459,8 @@ function summarize(data) {
   }
 }
 
-const DEFAULT_TEAM_COLORS = { home: COLORS.home, away: COLORS.away, other: '#9AA3AD' }
+// referee: 축구 전용 탐지 모델이 심판으로 본 트랙 (분석 결과 roles)
+const DEFAULT_TEAM_COLORS = { home: COLORS.home, away: COLORS.away, other: '#9AA3AD', referee: '#F2C14E' }
 
 /* ---------- 앱 ---------- */
 function App() {

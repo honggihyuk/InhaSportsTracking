@@ -325,8 +325,13 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
         except Exception as e:  # 모델 로드 실패 등 → 평균색으로 대체
             print(f"SigLIP2 팀 분류 실패, 평균색으로 대체: {e}")
             teams, team_info = None, {'method': 'color', 'fallback': str(e)}
+    from .team_embed import OTHER_LABELS, majority_labels
+    labels = majority_labels(track_labels)
+    special = {t for t, lab in labels.items() if lab in OTHER_LABELS}   # 탐지기가 심판·골키퍼로 본 트랙
     if teams is None:
-        teams, team_colors = cluster_teams(track_colors)
+        teams, team_colors = cluster_teams({t: c for t, c in track_colors.items() if t not in special})
+        teams = {**{t: 'other' for t in track_colors}, **teams}
+    teams = {t: ('other' if t in special else team) for t, team in teams.items()}
     return {
         'version': 2,
         'mode': mode,
@@ -341,6 +346,8 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
         'motion': motion,
         'teams': {str(k): v for k, v in teams.items()},
         'team_colors': team_colors,
+        # 트랙별 탐지 라벨 다수결 (축구 전용 탐지 모델: player | goalkeeper | referee, COCO 모델: person)
+        'track_labels': {str(k): v for k, v in labels.items()},
         'team_method': team_info,
         'sam': None if refiner is None else {'model': getattr(refiner, 'model_id', None), 'feet': sam_feet},
         'calibration': None,
@@ -486,7 +493,7 @@ def calibrate(result: Dict, keyframe_points: List[Dict], line_masks=None, smooth
         # 골키퍼 배정은 자동 팀 분류 원본에서 매번 다시 계산 (보정을 다시 저장해도 결과가 누적되지 않도록)
         result.setdefault('teams_auto', dict(result.get('teams') or {}))
         teams = dict(result['teams_auto'])
-        result['roles'] = pp.assign_goalkeepers(result['world'], teams, fps)
+        result['roles'] = pp.assign_goalkeepers(result['world'], teams, fps, result.get('track_labels'))
         result['teams'] = teams
         result['stats'] = match_stats.compute(result)
     return result
