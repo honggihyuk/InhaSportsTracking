@@ -232,3 +232,20 @@ def test_auto_calibration_endpoint_on_realtime_result(client):
     assert r.status_code == 200 and r.json()["calibrated_frames"] > 0
     bad = [{**kfs[0], "homography": [1.0, 2.0]}]
     assert client.post("/analysis/match.avi/calibration", json={"keyframes": bad}).status_code == 400
+
+
+def test_neighbor_vote_drops_only_the_wrong_keyframe(clip, video_data):
+    motion, store = video_data
+
+    class Fake:
+        """0.5 초 간격 모두 정답, 프레임 30 만 10 m 어긋난 (점수 더 높은) 해석"""
+        t = 0
+
+        def calibrate(self, mask, valid):
+            t = Fake.t
+            Fake.t += 15
+            if t == 30:
+                return ac.AutoResult(np.array([[1, 0, 10], [0, 1, 0], [0, 0, 1]]) @ clip.H[t], 0.95, 0.9, 0.9, 0.3, 6, 100)
+            return ac.AutoResult(clip.H[t], 0.8, 0.9, 0.8, 0.5, 6, 100)
+    kfs = ac.auto_keyframes(motion, store, (960, 540), fps=30, every_s=0.5, calibrator=Fake())
+    assert [k['frame'] for k in kfs] == [0, 15, 45]           # 이웃 다수와 어긋난 30 만 제거 (점수가 높아도)

@@ -14,8 +14,8 @@
   5. 정밀화·확신도        : 상위 가설을 LineRefiner 로 정렬한 뒤 다시 채점, 서로 다른 해석(화면 중심이
                            4 m 이상 떨어진 가설) 중 2 등과의 차이가 충분해야 채택
 
-auto_keyframes() 는 영상 전체에서 일정 간격(+ 장면 전환 직후) 프레임에 이를 적용하고, 이웃 자동 키프레임끼리
-카메라 움직임으로 서로 맞는지 교차 검증해 틀린 키프레임을 버린다.
+auto_keyframes() 는 영상 전체에서 일정 간격(기본 0.5 초, + 장면 전환 직후) 프레임에 이를 적용하고, 이웃 자동
+키프레임끼리 카메라 움직임으로 서로 맞는지 투표해 이웃 대부분과 어긋나는 틀린 키프레임을 버린다.
 """
 
 from dataclasses import dataclass
@@ -528,11 +528,14 @@ def _consistent(H_a: np.ndarray, H_b: np.ndarray, chain_ab: Optional[np.ndarray]
 
 
 def auto_keyframes(motion: List[Optional[list]], masks: Callable[[int], Optional[Tuple[np.ndarray, np.ndarray]]],
-                   image_size: Tuple[int, int], fps: float = 30.0, every_s: float = 2.0, scale: float = 0.5,
-                   calibrator: Optional[AutoCalibrator] = None,
+                   image_size: Tuple[int, int], fps: float = 30.0, every_s: float = 0.5, scale: float = 0.5,
+                   calibrator: Optional[AutoCalibrator] = None, window_s: float = 3.0,
+                   tol_m: float = 2.0, tol_per_s: float = 1.0,
                    progress: Callable[[int, int], None] = lambda d, t: None) -> List[Dict]:
     """
     일정 간격(every_s)과 장면 전환 직후 프레임에서 자동 보정 → 확신한 프레임만 키프레임으로
+
+    이웃 키프레임 검증 허용 오차: tol_m + tol_per_s × 간격(초) 미터 (광류 누적 오차를 감안)
 
     Returns:
         [{frame, homography: [9], source: 'auto', score: {f1, precision, recall, margin}}, ...]
@@ -553,25 +556,33 @@ def auto_keyframes(motion: List[Optional[list]], masks: Callable[[int], Optional
                               'score': {'f1': r.f1, 'precision': r.precision, 'recall': r.recall, 'margin': r.margin}})
         progress(i + 1, len(frames))
 
-    # 교차 검증: 같은 장면 구간의 이웃 자동 키프레임과 카메라 움직임으로 맞는지. 어긋나면 점수 낮은 쪽 제거
-    Ms = [None if m is None else np.array(m, float).reshape(3, 3) for m in motion]
+    # 교차 검증: 같은 장면의 가까운 이웃 키프레임(앞뒤 3 개, window_s 이내)과 카메라 움직임으로 맞는지 투표.
+    # 이웃 대부분과 어긋나는 키프레임만 버린다. (예전에는 어긋난 쌍에서 하나를 지우고 더 먼 이웃과 다시 비교해,
+    # 긴 구간의 광류 누적 오차 때문에 맞는 키프레임까지 연쇄적으로 지워졌다)
+    from .calib_track import MotionChain
+    mc = MotionChain(motion)
+    win = max(1, int(round(window_s * fps)))
 
-    def chain(a: int, b: int) -> Optional[np.ndarray]:
-        C = np.eye(3)
-        for t in range(a + 1, b + 1):
-            if Ms[t] is None:
-                return None
-            C = Ms[t] @ C
-        return C
+    def agree(a: Dict, b: Dict) -> Optional[bool]:
+        if not mc.same(a['frame'], b['frame']):
+            return None                               # 장면이 달라 비교 불가
+        gap_s = abs(b['frame'] - a['frame']) / fps
+        C = mc.P[b['frame']] @ mc.Pinv[a['frame']]    # a → b 픽셀
+        return _consistent(a['H'], b['H'], C, w, h, tol=tol_m + tol_per_s * gap_s)
 
-    changed = True
-    while changed and len(found) > 1:
-        changed = False
-        for k in range(len(found) - 1):
-            a, b = found[k], found[k + 1]
-            if not _consistent(a['H'], b['H'], chain(a['frame'], b['frame']), w, h):
-                found.pop(k if a['score']['f1'] < b['score']['f1'] else k + 1)
-                changed = True
-                break
+    while len(found) > 1:
+        worst, worst_key = None, None
+        for i, kf in enumerate(found):
+            near = [o for o in found[max(0, i - 3):i] + found[i + 1:i + 4] if abs(o['frame'] - kf['frame']) <= win]
+            votes = [v for v in (agree(kf, o) for o in near) if v is not None]
+            bad = sum(not v for v in votes)
+            good = len(votes) - bad
+            if bad > good:
+                key = (bad - good, -kf['score']['f1'])
+                if worst_key is None or key > worst_key:
+                    worst, worst_key = i, key
+        if worst is None:
+            break
+        found.pop(worst)
     return [{'frame': kf['frame'], 'homography': np.round(kf['H'], 10).ravel().tolist(), 'source': 'auto',
              'points': [], 'score': kf['score']} for kf in found]

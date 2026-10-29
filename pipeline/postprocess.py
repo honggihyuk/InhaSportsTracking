@@ -228,23 +228,24 @@ def clean_ball(frames: List[List[list]], motion: List[Optional[list]], fps: floa
 # ---------------------------------------------------------------------------
 # 경기장 좌표 평활화 (칼만 + RTS)
 # ---------------------------------------------------------------------------
-def rts_smooth(ts: np.ndarray, z: np.ndarray, dt: float, accel_std: float, meas_std: float
+def rts_smooth(ts: np.ndarray, z: np.ndarray, dt: float, accel_std: float, meas_std
                ) -> Tuple[np.ndarray, np.ndarray]:
     """
     등속 모델 칼만 필터 + Rauch-Tung-Striebel 역방향 평활화
 
     Args:
         ts: 측정 프레임 번호 (증가, 공백 허용), z: (N, 2) 측정 위치
+        meas_std: 측정 잡음 (m) — 스칼라 또는 측정마다 다른 값 (N,)
     Returns:
         (평활 위치 (N, 2), 평활 속도 (N, 2)) — 측정 프레임에서의 값
     """
     n = len(ts)
     I4 = np.eye(4)
     Hm = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], float)
-    R = np.eye(2) * meas_std ** 2
+    stds = np.broadcast_to(np.asarray(meas_std, float), (n,))
     xs_f, Ps_f, xs_p, Ps_p, Fs = [], [], [], [], []
     x = np.array([z[0, 0], z[0, 1], 0.0, 0.0])
-    P = np.diag([meas_std ** 2, meas_std ** 2, 25.0, 25.0])
+    P = np.diag([stds[0] ** 2, stds[0] ** 2, 25.0, 25.0])
     for i in range(n):
         if i > 0:
             h = (ts[i] - ts[i - 1]) * dt
@@ -263,7 +264,7 @@ def rts_smooth(ts: np.ndarray, z: np.ndarray, dt: float, accel_std: float, meas_
         Ps_p.append(P.copy())
         Fs.append(F)
         y = z[i] - Hm @ x
-        S = Hm @ P @ Hm.T + R
+        S = Hm @ P @ Hm.T + np.eye(2) * stds[i] ** 2
         K = P @ Hm.T @ np.linalg.inv(S)
         x = x + K @ y
         P = (I4 - K @ Hm) @ P
@@ -281,13 +282,24 @@ def rts_smooth(ts: np.ndarray, z: np.ndarray, dt: float, accel_std: float, meas_
     return X[:, :2], X[:, 2:]
 
 
+def conf_noise(conf: Optional[float], full: float = 0.7, worst: float = 30.0) -> float:
+    """보정 신뢰도 → 측정 잡음 배율 (full 이상 1 배, 0 이면 worst 배)"""
+    if conf is None:
+        return 1.0
+    c = min(max(conf / full, 0.0), 1.0)
+    return float(worst ** (1.0 - c))
+
+
 def smooth_world(world: List[Optional[List[list]]], fps: float, ball_id: int = 0,
                  player_accel: float = 5.0, ball_accel: float = 40.0,
-                 meas_std: float = 0.4, max_gap_s: float = 1.0) -> List[Optional[List[list]]]:
+                 meas_std: float = 0.4, max_gap_s: float = 1.0,
+                 frame_conf: Optional[List[Optional[float]]] = None) -> List[Optional[List[list]]]:
     """
     world[t] = [[id, x, y], ...] → [[id, x, y, speed(m/s)], ...] (평활화된 위치와 속력)
 
     트랙마다 max_gap_s 보다 긴 공백에서 구간을 나눠 따로 평활화한다. 보정 안 된 프레임(None)은 그대로 둔다.
+    frame_conf: 프레임별 보정 신뢰도(0~1). 신뢰도가 낮은 프레임의 측정은 잡음을 크게 잡아(최대 30 배)
+                필터가 앞뒤 믿을 만한 프레임으로 보간하듯 따라가게 한다 → 보정 오차가 속력으로 번지지 않음
     """
     dt = 1.0 / (fps or 30.0)
     series: Dict[int, List[Tuple[int, float, float]]] = {}
@@ -305,8 +317,11 @@ def smooth_world(world: List[Optional[List[list]]], fps: float, ball_id: int = 0
                 i = seg[0]
                 out[ts[i]].append([tid, round(arr[i, 1], 2), round(arr[i, 2], 2), 0.0])
                 continue
-            pos, vel = rts_smooth(ts[seg], arr[seg, 1:], dt, ball_accel if tid == ball_id else player_accel,
-                                  meas_std)
+            std = meas_std
+            if frame_conf is not None:
+                std = np.array([meas_std * conf_noise(frame_conf[t] if t < len(frame_conf) else None)
+                                for t in ts[seg]])
+            pos, vel = rts_smooth(ts[seg], arr[seg, 1:], dt, ball_accel if tid == ball_id else player_accel, std)
             for i, p, v in zip(seg, pos, vel):
                 out[ts[i]].append([tid, round(float(p[0]), 2), round(float(p[1]), 2),
                                    round(float(np.hypot(*v)), 2)])

@@ -62,14 +62,17 @@ def plausible_ball(bbox: Tuple[int, int, int, int]) -> bool:
 
 
 def camera_motion(prev_gray: np.ndarray, gray: np.ndarray, prev_boxes: List[Tuple[int, int, int, int]],
-                  scale: float = MOTION_SCALE) -> Optional[np.ndarray]:
+                  scale: float = MOTION_SCALE, exclude: Optional[np.ndarray] = None) -> Optional[np.ndarray]:
     """
     이전 프레임 → 현재 프레임 카메라 움직임 호모그래피 M (원본 해상도, p_t = M · p_{t-1})
 
     중계 카메라는 고정 위치에서 회전·줌하므로 배경 전체가 하나의 호모그래피로 움직인다.
     움직이는 선수 영역을 가리고 특징점 광류로 추정, 장면 전환 등 실패 시 None.
+    exclude: 특징점을 뽑지 않을 영역 (축소 해상도, 0 아닌 곳) — 화면에 고정된 점수판·로고 등
     """
     mask = np.full(prev_gray.shape, 255, np.uint8)
+    if exclude is not None:
+        mask[exclude > 0] = 0
     for x1, y1, x2, y2 in prev_boxes:
         mask[int(y1 * scale):int(y2 * scale) + 1, int(x1 * scale):int(x2 * scale) + 1] = 0
     pts = cv2.goodFeaturesToTrack(prev_gray, maxCorners=500, qualityLevel=0.01, minDistance=8, mask=mask)
@@ -84,6 +87,48 @@ def camera_motion(prev_gray: np.ndarray, gray: np.ndarray, prev_boxes: List[Tupl
         return None
     S = np.diag([scale, scale, 1.0])
     return np.linalg.inv(S) @ M @ S
+
+
+class CameraMotion:
+    """
+    프레임 간 카메라 움직임 추정 + 화면에 고정된 오버레이(점수판·방송사 로고·자막) 자동 제외
+
+    오버레이는 카메라가 움직여도 화면에서 그대로라 그 특징점은 '움직임 0' 을 가리킨다. 빠른 팬에서는 RANSAC 이
+    걸러내지만 느린 팬(프레임당 2 px 미만)에서는 정상점으로 섞여 움직임을 0 쪽으로 끌어당기고, 이것이 쌓여
+    경기장 보정이 수 m 어긋났다. 카메라가 움직이는(화면 중심 이동 > 2 px) 프레임에서 질감이 있는데도 밝기가
+    변하지 않는 픽셀을 세어, 여러 프레임 연속 그런 곳은 이후 특징점에서 뺀다.
+    """
+
+    def __init__(self, scale: float = MOTION_SCALE, still_frames: int = 8):
+        self.scale = scale
+        self.still_frames = still_frames
+        self.static: Optional[np.ndarray] = None
+        self.prev: Optional[np.ndarray] = None
+
+    def exclude_mask(self) -> Optional[np.ndarray]:
+        if self.static is None:
+            return None
+        return cv2.dilate((self.static >= self.still_frames).astype(np.uint8), np.ones((9, 9), np.uint8))
+
+    def __call__(self, gray: np.ndarray, prev_boxes: List[Tuple[int, int, int, int]]) -> Optional[np.ndarray]:
+        """gray: 축소 해상도 회색조 프레임. 첫 프레임이면 None"""
+        prev, self.prev = self.prev, gray
+        if self.static is None or self.static.shape != gray.shape:
+            self.static = np.zeros(gray.shape, np.int16)
+        if prev is None or prev.shape != gray.shape:
+            return None
+        M = camera_motion(prev, gray, prev_boxes, self.scale, exclude=self.exclude_mask())
+        if M is not None:
+            h, w = gray.shape
+            c = np.array([w / 2 / self.scale, h / 2 / self.scale, 1.0])
+            q = M @ c
+            if np.hypot(*(q[:2] / q[2] - c[:2])) * self.scale > 2.0:      # 카메라가 움직이는 프레임만
+                still = cv2.absdiff(prev, gray) < 4
+                textured = cv2.morphologyEx(prev, cv2.MORPH_GRADIENT, np.ones((3, 3), np.uint8)) >= 20
+                self.static = np.where(textured & still, np.minimum(self.static + 1, 100),
+                                       np.where(textured, np.maximum(self.static - 2, 0), self.static)
+                                       ).astype(np.int16)
+        return M
 
 
 def torso_color(frame: np.ndarray, bbox: Tuple[int, int, int, int]) -> Optional[np.ndarray]:
@@ -189,7 +234,8 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
     track_crops: Dict[int, List[np.ndarray]] = {}
     track_labels: Dict[int, Dict[str, int]] = {}
     sam_feet = 0
-    prev_gray, prev_boxes = None, []
+    prev_boxes = []
+    motion_estimator = CameraMotion()
     last_key = None  # 마지막 탐지 프레임 인덱스
     try:
         while len(frames) < total:
@@ -248,9 +294,8 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
 
             if line_store is not None:
                 line_store.append(*pitch_lines.line_mask(small, prev_boxes, box_scale=MOTION_SCALE))
-            M = camera_motion(prev_gray, gray, prev_boxes) if prev_gray is not None else None
+            M = motion_estimator(gray, prev_boxes)
             motion.append(None if M is None else np.round(M, 6).ravel().tolist())
-            prev_gray = gray
             progress(idx + 1, total)
     finally:
         cap.release()
@@ -378,30 +423,36 @@ def clipped_by_border(o: list, width: int, height: int, margin: int = 2) -> bool
     return o[2] <= margin or o[4] >= width - 1 - margin or o[5] >= height - 1 - margin
 
 
-def calibrate(result: Dict, keyframe_points: List[Dict], line_masks=None, smooth: Optional[bool] = None) -> Dict:
+def calibrate(result: Dict, keyframe_points: List[Dict], line_masks=None, smooth: Optional[bool] = None,
+              progress: Callable[[int, int], None] = lambda d, t: None) -> Dict:
     """
     keyframe_points: [{frame: int, points: [{image: [u, v], pitch: [x, y]}, ...]}, ...]
     → result['calibration'], result['world'] 갱신
     world[t] = [[track_id, x, y, speed], ...] (경기장 밖 PITCH_MARGIN 이상 벗어난 객체 제외), 보정 불가 프레임은 None
 
+    키프레임 사이는 pipeline/calib_track.anchored_homographies 로 잇는다: 0.5 초 간격 앵커를 라인 정렬로 다시 맞추고
+    (라인 마스크가 있을 때), 앵커 사이는 양쪽에서 카메라 움직임으로 옮겨 와 혼합, 시간 평활화 후 프레임별 신뢰도를 남긴다.
+
     Args:
-        line_masks: pitch.LineMaskStore (또는 t → (라인, 유효 영역) 함수). 주면 매 프레임 경기장 라인에
+        line_masks: pitch.LineMaskStore (또는 t → (라인, 유효 영역) 함수). 주면 앵커를 경기장 라인에
                     정렬해 카메라 움직임 누적 오차를 제거한다 (정밀 분석 모드)
         smooth: 경기장 좌표 칼만+RTS 평활화, 골키퍼 판정, 경기 지표 계산 (None 이면 정밀 모드일 때만).
-                끄면 world 는 [track_id, x, y] (속력 없음)
+                끄면 world 는 [track_id, x, y] (속력 없음). 신뢰도 낮은 프레임은 평활화에서 가중치를 낮춘다
     """
-    from . import pitch as pitch_lines
+    from .calib_track import anchored_homographies, line_conf
 
     if smooth is None:
         smooth = result.get('mode') == 'precise'
     keyframes = {int(kf['frame']): keyframe_homography(kf.get('points') or [], kf.get('homography'))
                  for kf in keyframe_points}
-    if line_masks is not None:
-        scale = line_masks.shape[1] / result['width'] if getattr(line_masks, 'shape', None) else MOTION_SCALE
-        Hs, quality = pitch_lines.track_homographies(result['motion'], keyframes, line_masks,
-                                                     pitch_lines.LineRefiner(scale=scale))
-    else:
-        Hs, quality = frame_homographies(result['motion'], keyframes), None
+    kconf = {int(kf['frame']): max(0.6, line_conf(kf['score']['f1']))       # 자동 키프레임만 (수동은 고정)
+             for kf in keyframe_points if kf.get('source') == 'auto' and kf.get('score')}
+    size = (result.get('width') or 1920, result.get('height') or 1080)
+    scale = line_masks.shape[1] / size[0] if getattr(line_masks, 'shape', None) else MOTION_SCALE
+    fps = result.get('fps') or 30.0
+    Hs, conf, info = anchored_homographies(result['motion'], keyframes, size,
+                                           fps=fps, masks=line_masks, scale=scale, keyframe_conf=kconf,
+                                           progress=progress)
     world = []
     for objs, H in zip(result['frames'], Hs):
         if H is None:
@@ -416,18 +467,22 @@ def calibrate(result: Dict, keyframe_points: List[Dict], line_masks=None, smooth
                 if abs(x) <= HALF_LENGTH + PITCH_MARGIN and abs(y) <= HALF_WIDTH + PITCH_MARGIN:
                     entries.append([o[0], round(float(x), 2), round(float(y), 2)])
         world.append(entries)
-    calibration = {'keyframes': keyframe_points, 'refined': line_masks is not None}
-    if quality is not None:
-        calibration['line_fit'] = quality          # 프레임별 라인 정렬 비율 (정렬 안 됐으면 None)
-        calibration['refined_frames'] = sum(q is not None for q in quality)
+    calibration = {'keyframes': keyframe_points, 'refined': line_masks is not None,
+                   'method': 'anchored', 'anchors': info['anchors'], 'tracked_anchors': info['tracked'],
+                   'recovered_anchors': info['recovered'], 'replaced_keyframes': info['replaced'],
+                   'max_slide': info['max_slide'],
+                   'confidence': conf}                 # 프레임별 보정 신뢰도 0~1 (보정 없음 None)
+    if line_masks is not None:
+        # 라인으로 검증된 프레임 수 (화면 표시 '라인 정렬 % 프레임')
+        calibration['refined_frames'] = sum(c is not None and c >= 0.5 for c in conf)
     result['calibration'] = calibration
-    result['homographies'] = [None if H is None else np.round(H / H[2, 2], 8).ravel().tolist() for H in Hs]
+    # 부호까지 정규화된 값 (orient): 역행렬의 동차 좌표 w > 0 이 '카메라 앞'
+    result['homographies'] = [None if H is None else np.round(H, 10).ravel().tolist() for H in Hs]
     result['world'] = world
     if smooth:
         from . import postprocess as pp
         from analysis import stats as match_stats
-        fps = result.get('fps') or 30.0
-        result['world'] = pp.smooth_world(world, fps)
+        result['world'] = pp.smooth_world(world, fps, frame_conf=conf)
         # 골키퍼 배정은 자동 팀 분류 원본에서 매번 다시 계산 (보정을 다시 저장해도 결과가 누적되지 않도록)
         result.setdefault('teams_auto', dict(result.get('teams') or {}))
         teams = dict(result['teams_auto'])
@@ -437,21 +492,26 @@ def calibrate(result: Dict, keyframe_points: List[Dict], line_masks=None, smooth
     return result
 
 
-def auto_calibrate(result: Dict, line_masks, every_s: float = 2.0, smooth: Optional[bool] = None,
+def auto_calibrate(result: Dict, line_masks, every_s: float = 0.5, smooth: Optional[bool] = None,
                    progress: Callable[[int, int], None] = lambda d, t: None) -> Dict:
     """
     사람이 기준점을 찍지 않고 경기장 라인으로 키프레임을 자동으로 찾아 보정 (pipeline/autocalib.py)
+
+    every_s 간격(기본 0.5 초)으로 단일 프레임 자동 보정을 시도하고, 키프레임 사이는 calibrate() 의 앵커 추적으로 잇는다.
 
     기존 수동 키프레임은 유지하고, 수동 키프레임 ±1 초 안의 자동 키프레임은 버린다 (사람 입력 우선).
     자동 키프레임을 하나도 못 찾고 수동 키프레임도 없으면 ValueError.
 
     Returns:
-        {'auto': 자동 키프레임 수, 'manual': 수동 키프레임 수, 'calibrated_frames': 보정된 프레임 수}
+        {'auto': 자동 키프레임 수, 'manual': 수동 키프레임 수, 'calibrated_frames': 보정된 프레임 수,
+         'confident_frames': 신뢰도 0.5 이상 프레임 수, 'seconds': {'keyframes', 'tracking'} 소요 시간}
     """
+    import time
     from . import autocalib
 
     fps = result.get('fps') or 30.0
     scale = line_masks.shape[1] / result['width'] if getattr(line_masks, 'shape', None) else MOTION_SCALE
+    t0 = time.perf_counter()
     auto = autocalib.auto_keyframes(result['motion'], line_masks, (result['width'], result['height']), fps=fps,
                                     every_s=every_s, scale=scale, progress=progress)
     manual = [kf for kf in (result.get('calibration') or {}).get('keyframes', []) if kf.get('source') != 'auto']
@@ -459,9 +519,14 @@ def auto_calibrate(result: Dict, line_masks, every_s: float = 2.0, smooth: Optio
     auto = [kf for kf in auto if not near_manual(kf['frame'])]
     if not auto and not manual:
         raise ValueError("경기장 라인으로 자동 보정할 수 있는 프레임을 찾지 못했습니다. 기준점을 직접 지정하세요.")
+    t1 = time.perf_counter()
     calibrate(result, sorted(manual + auto, key=lambda k: int(k['frame'])), line_masks=line_masks, smooth=smooth)
+    conf = result['calibration']['confidence']
+    t2 = time.perf_counter()
     return {'auto': len(auto), 'manual': len(manual),
-            'calibrated_frames': sum(w is not None for w in result['world'])}
+            'calibrated_frames': sum(w is not None for w in result['world']),
+            'confident_frames': sum(c is not None and c >= 0.5 for c in conf),
+            'seconds': {'keyframes': round(t1 - t0, 1), 'tracking': round(t2 - t1, 1)}}
 
 
 def save(result: Dict, path: Path):
