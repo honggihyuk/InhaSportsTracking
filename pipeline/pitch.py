@@ -297,13 +297,25 @@ class LineRefiner:
 
     @staticmethod
     def _plausible(G0, G, w, h, max_shift: float = 0.08) -> bool:
-        """한 프레임 정렬로 화면 격자가 너무 크게(화면 폭 8 % 이상) 움직이면 잘못 맞춘 것으로 본다"""
-        corners = np.array([[0, 0], [w, 0], [w, h], [0, h], [w / 2, h / 2]], float)
-        Pc, _ = _project(np.linalg.inv(G0), corners)
-        moved, z = _project(G, Pc)
-        if np.any(z <= 0):
+        """
+        한 프레임 정렬로 화면 격자가 너무 크게(화면 폭 8 % 이상) 움직이면 잘못 맞춘 것으로 본다
+
+        화면 위쪽(관중석)은 지평선 너머라 경기장 평면에 대응하지 않으므로, 예측값 G0 에서 카메라 앞
+        (경기장 위)인 격자점만 비교한다. (예전에는 네 모서리를 모두 써서 화면 위쪽이 관중석인 중계 장면에서
+        정렬이 항상 거부됐다)
+        """
+        grid = np.array([[x * w, y * h] for y in (0.0, 0.25, 0.5, 0.75, 1.0) for x in (0.0, 0.5, 1.0)], float)
+        Gi = np.linalg.inv(G0)
+        q = grid @ Gi[:, :2].T + Gi[:, 2]
+        origin_w = float(np.sign(G0[2, 2])) or 1.0     # G0 정규화 부호 (경기장 원점이 카메라 앞)
+        front = q[:, 2] * origin_w > 1e-12
+        if front.sum() < 3:
             return False
-        return float(np.max(np.linalg.norm(moved - corners, axis=1))) <= max_shift * w
+        Pc = q[front, :2] / q[front, 2:3]
+        moved, z = _project(G, Pc)
+        if np.any(z * origin_w <= 0):
+            return False
+        return float(np.max(np.linalg.norm(moved - grid[front], axis=1))) <= max_shift * w
 
 
 # ---------------------------------------------------------------------------
