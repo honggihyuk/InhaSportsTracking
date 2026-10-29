@@ -61,6 +61,7 @@ export function twinFrame(analysis, f) {
       players.push({
         id,
         team: analysis.teams?.[id] ?? 'other',
+        role: analysis.roles?.[id] ?? null, // 'goalkeeper' | 'referee' | null
         position_3d: [x, y, 0],
         velocity: Math.min(speed, MAX_PLAYER_SPEED),
       })
