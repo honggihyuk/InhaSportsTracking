@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { KIND_BALL, videoRect, inkOn, projectedPitchLines } from '../analysis'
 
-const ACCENT = '#D7FF3C'
-const OTHER = '#9AA3AD'
+const ACCENT = '#F2D64B' // 공 강조 (index.css --ball)
+const OTHER = '#98A39D'
+const INK = '#070908'
 const ROLE_TAG = { goalkeeper: ' GK', referee: ' REF' }
 
 /**
@@ -39,17 +40,17 @@ export function VideoOverlay({ analysis, frameIndex, teamColors, showBoxes, show
     if (!rect) return
     const X = (u) => rect.x + u * rect.scale
     const Y = (v) => rect.y + v * rect.scale
-    ctx.font = '600 11px "Pretendard Variable", system-ui, sans-serif'
+    ctx.font = '600 10.5px "CS Mono", "Pretendard Variable", ui-monospace, monospace'
     ctx.textBaseline = 'middle'
 
     const chip = (text, x, y, bg) => {
-      const w = ctx.measureText(text).width + 10
+      const w = ctx.measureText(text).width + 12
       ctx.fillStyle = bg
       ctx.beginPath()
-      ctx.roundRect(x, y - 16, w, 15, 4)
+      ctx.roundRect(x, y - 16, w, 15, 7.5)
       ctx.fill()
       ctx.fillStyle = inkOn(bg)
-      ctx.fillText(text, x + 5, y - 8.5)
+      ctx.fillText(text, x + 6, y - 8.5)
     }
 
     // 보정 확인: 이 프레임의 호모그래피로 투영한 경기장 라인이 영상의 흰 라인과 겹치면 보정이 맞은 것
@@ -58,7 +59,7 @@ export function VideoOverlay({ analysis, frameIndex, teamColors, showBoxes, show
       ctx.beginPath()
       ctx.rect(rect.x, rect.y, analysis.width * rect.scale, analysis.height * rect.scale)
       ctx.clip()
-      ctx.strokeStyle = 'rgba(215, 255, 60, 0.75)'
+      ctx.strokeStyle = 'rgba(52, 199, 123, 0.85)' // index.css --accent
       ctx.lineWidth = 1.25
       for (const pl of projectedPitchLines(analysis, frameIndex)) {
         ctx.beginPath()
@@ -97,13 +98,13 @@ export function VideoOverlay({ analysis, frameIndex, teamColors, showBoxes, show
         const x = X(image[0]), y = Y(image[1])
         const active = landmark.id === calibration.activeId
         ctx.fillStyle = ACCENT
-        ctx.strokeStyle = '#0A0B0D'
+        ctx.strokeStyle = INK
         ctx.lineWidth = 2
         ctx.beginPath()
         ctx.arc(x, y, active ? 6 : 4.5, 0, Math.PI * 2)
         ctx.fill()
         ctx.stroke()
-        chip(landmark.label, x + 8, y + 4, 'rgba(10, 11, 13, 0.8)')
+        chip(landmark.label, x + 8, y + 4, 'rgba(7, 9, 8, 0.85)')
       }
     }
   }, [analysis, frameIndex, teamColors, showBoxes, showLines, calibration, size])
