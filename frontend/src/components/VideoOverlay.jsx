@@ -4,6 +4,7 @@ import { KIND_BALL, videoRect, inkOn, projectedPitchLines } from '../analysis'
 const ACCENT = '#F2D64B' // 공 강조 (index.css --ball)
 const OTHER = '#98A39D'
 const INK = '#070908'
+const ROLE_TAG = { goalkeeper: ' GK', referee: ' REF' }
 
 /**
  * 경기 영상 위 탐지 박스 오버레이 (canvas)
@@ -80,13 +81,14 @@ export function VideoOverlay({ analysis, frameIndex, teamColors, showBoxes, show
           ctx.stroke()
           chip('BALL', cx + r - 4, cy - r + 6, ACCENT)
         } else {
-          const color = teamColors[analysis.teams?.[id]] ?? OTHER
+          const role = analysis.roles?.[id]
+          const color = (role === 'referee' && teamColors.referee) || (teamColors[analysis.teams?.[id]] ?? OTHER)
           ctx.strokeStyle = color
           ctx.lineWidth = 1.75
           ctx.setLineDash(conf === 0 ? [4, 3] : []) // 신뢰도 0 = 후처리로 보간한 박스 (가려진 구간)
           ctx.strokeRect(X(x1), Y(y1), (x2 - x1) * rect.scale, (y2 - y1) * rect.scale)
           ctx.setLineDash([])
-          chip(`#${id}`, X(x1), Y(y1), color)
+          chip(`#${id}${ROLE_TAG[role] ?? ''}`, X(x1), Y(y1), color)
         }
       }
     }

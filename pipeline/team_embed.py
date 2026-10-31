@@ -16,7 +16,18 @@ import numpy as np
 CROP_SIZE = 96              # 저장할 크롭 크기(px). SigLIP 프로세서가 224 로 다시 키운다
 MIN_CROPS = 3               # 이보다 적은 트랙은 판정하지 않음('other')
 MIN_VOTE = 0.6              # 트랙 내 크롭의 이 비율 이상이 같은 군집이어야 팀 확정
-OTHER_LABELS = ('referee',)  # 탐지기가 이 라벨로 낸 트랙은 군집에서 빼고 'other'
+OTHER_LABELS = ('referee', 'goalkeeper')  # 탐지기가 이 라벨로 낸 트랙은 군집에서 빼고 'other'
+#   심판은 그대로 'other', 골키퍼는 보정 뒤 postprocess.assign_goalkeepers 가 위치로 팀에 배정한다
+#   (골키퍼 유니폼은 양 팀과 달라 군집에 넣으면 팀 중심을 흐린다)
+
+
+def majority_labels(track_labels: Optional[Dict[int, Dict[str, int]]], min_votes: int = 3) -> Dict[int, str]:
+    """트랙 ID → 탐지 라벨 다수결 (투표 min_votes 미만 트랙은 제외)"""
+    out = {}
+    for tid, votes in (track_labels or {}).items():
+        if votes and sum(votes.values()) >= min_votes:
+            out[tid] = max(votes, key=votes.get)
+    return out
 
 
 def jersey_crop(frame: np.ndarray, bbox: Sequence[int], mask: Optional[np.ndarray] = None) -> Optional[np.ndarray]:
@@ -149,15 +160,14 @@ def classify_teams(track_crops: Dict[int, List[np.ndarray]],
         track_crops: 트랙 ID → jersey_crop 크롭 목록
         embedder: 크롭 목록 → (N, D) 임베딩
         track_colors: 트랙 ID → 상체 Lab 색 샘플 (팀 대표색 표시용, 없으면 크롭 평균색)
-        track_labels: 트랙 ID → {탐지 라벨: 횟수}. 'referee' 가 다수인 트랙은 'other'
+        track_labels: 트랙 ID → {탐지 라벨: 횟수}. 'referee'·'goalkeeper' 가 다수인 트랙은 군집에서 빼고 'other'
         outlier_k: 트랙 중심이 군집 중심에서 (중앙값 × k) 이상 멀면 'other' (심판·골키퍼 등)
 
     Returns:
         (teams {트랙 ID: home|away|other}, team_colors {home|away: '#rrggbb'}, info)
     """
     teams = {tid: 'other' for tid in track_crops}
-    referee = {tid for tid, votes in (track_labels or {}).items()
-               if votes and max(votes, key=votes.get) in OTHER_LABELS}
+    referee = {tid for tid, label in majority_labels(track_labels, 1).items() if label in OTHER_LABELS}
     ids = [tid for tid, cs in track_crops.items() if len(cs) >= MIN_CROPS and tid not in referee]
     info = {'method': 'siglip', 'tracks': len(ids), 'referee_tracks': len(referee)}
     if len(ids) < 2:

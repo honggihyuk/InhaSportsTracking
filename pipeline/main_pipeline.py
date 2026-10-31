@@ -204,6 +204,7 @@ class Soccer3DPipeline:
             self.detector = RFDETRDetector(
                 size=rf.get('size', 'medium'),
                 checkpoint=rf.get('checkpoint'),
+                resolution=rf.get('resolution'),
                 device=self.device,
                 confidence_threshold=rf.get('confidence_threshold', 0.4),
                 ball_threshold=rf.get('ball_threshold', 0.25),

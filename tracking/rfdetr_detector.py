@@ -44,11 +44,12 @@ class RFDETRDetector:
     def __init__(self, size: str = 'medium', checkpoint: Optional[str] = None, device: str = 'cuda',
                  confidence_threshold: float = 0.4, ball_threshold: float = 0.25, iou_threshold: float = 0.45,
                  imgsz: Optional[int] = None, ball_imgsz: Optional[int] = None, ball_tile: Optional[int] = None,
-                 tile_overlap: float = 0.2, model=None):
+                 tile_overlap: float = 0.2, resolution: Optional[int] = None, model=None):
         """
         Args:
             size: 'nano' | 'small' | 'medium' | 'base' | 'large' (Apache 2.0 크기만)
-            checkpoint: 파인튜닝한 가중치(.pth). None 이면 COCO 사전학습 가중치
+            checkpoint: 파인튜닝한 가중치(.pth). None 이거나 파일이 없으면(경고 후) COCO 사전학습 가중치
+            resolution: 모델 입력 해상도 (파인튜닝할 때 쓴 값, None 이면 크기별 기본값)
             imgsz: 추론 해상도 (None 이면 모델 기본값). 패치 크기 배수로 맞춘다
             ball_imgsz: 공을 위해 한 번 더 돌릴 전체 화면 해상도 (None 이거나 imgsz 와 같으면 생략)
             ball_tile: 공 타일 추론 크기(px, 원본 해상도). None 이면 끔
@@ -59,21 +60,36 @@ class RFDETRDetector:
         self.iou_threshold = iou_threshold
         self.imgsz, self.ball_imgsz, self.ball_tile, self.tile_overlap = imgsz, ball_imgsz, ball_tile, tile_overlap
         self.device = device
-        self.model = model if model is not None else self._build(size, checkpoint, device)
+        self.checkpoint = self._existing(checkpoint)
+        self.model = model if model is not None else self._build(size, self.checkpoint, device, resolution)
         self.class_names = self._class_names()
         self.multiple = self._multiple()
         print(f"✅ RF-DETR 탐지기 초기화 완료 (크기 {size}, 클래스 {sorted(set(self.class_names.values()))})")
 
     @staticmethod
-    def _build(size: str, checkpoint: Optional[str], device: str):
+    def _existing(checkpoint: Optional[str]) -> Optional[str]:
+        """설정한 파인튜닝 가중치 경로 (파일이 없으면 None — 가중치는 저장소에 없으므로 COCO 로 대체)"""
+        if not checkpoint:
+            return None
+        from .detector import resolve_path
+        path = resolve_path(checkpoint)
+        if not path.is_file():
+            print(f"⚠️ RF-DETR 파인튜닝 가중치가 없습니다: {path} → COCO 사전학습 가중치를 사용합니다 "
+                  f"(scripts/train_rfdetr.py 로 학습)")
+            return None
+        return str(path)
+
+    @staticmethod
+    def _build(size: str, checkpoint: Optional[str], device: str, resolution: Optional[int] = None):
         import rfdetr
         if size not in SIZES:
             raise ValueError(f"RF-DETR 크기는 {SIZES} 중 하나입니다: {size}")
         cls = getattr(rfdetr, f"RFDETR{size.capitalize()}")
         kwargs = {'device': device}
+        if resolution:
+            kwargs['resolution'] = int(resolution)
         if checkpoint:
-            from .detector import resolve_path
-            kwargs['pretrain_weights'] = str(resolve_path(checkpoint))
+            kwargs['pretrain_weights'] = checkpoint
         model = cls(**kwargs)
         try:
             model.optimize_for_inference()  # 가능하면 추론 그래프 최적화 (실패해도 그대로 사용)
