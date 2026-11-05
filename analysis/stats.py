@@ -210,6 +210,9 @@ def compute(result: Dict) -> Dict:
     teams = result.get('teams') or {}
     roles = result.get('roles') or {}
     players = player_stats(world, teams, roles, fps)
+    for tid, info in (result.get('identities') or {}).items():       # 등번호 (tracking/identity.py, 확정된 것만)
+        if tid in players and info.get('jersey_number') is not None:
+            players[tid]['jersey_number'] = info['jersey_number']
     poss = possession(world, teams, fps)
     sides = team_sides(players, world, teams)
     team_totals = {}
