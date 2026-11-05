@@ -1091,6 +1091,7 @@ function App() {
                       .map(([id, p]) => (
                         <tr key={id}>
                           <td><span className="team-dot" style={{ background: teamColors[p.team] }} />#{id}
+                            {p.jersey_number != null && <small> · {p.jersey_number}번</small>}
                             {p.role === 'goalkeeper' && <small> GK</small>}</td>
                           <td>{p.distance.toFixed(0)}</td><td>{p.max_speed.toFixed(1)}</td><td>{p.sprints.length}</td>
                         </tr>

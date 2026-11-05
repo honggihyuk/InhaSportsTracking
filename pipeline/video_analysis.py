@@ -25,6 +25,7 @@ MOTION_SCALE = 0.5          # 카메라 움직임 추정 해상도 배율 (1080p
 TEAM_SAMPLE_EVERY = 3       # 트랙별 유니폼 색 샘플 간격 (프레임)
 TEAM_MAX_SAMPLES = 40
 TEAM_MAX_CROPS = 16         # 트랙별 SigLIP2 팀 분류 크롭 수
+JERSEY_SAMPLE_EVERY = 5     # 등번호 크롭 후보 간격 (탐지 프레임 기준)
 PITCH_MARGIN = 5.0          # m, 경기장 밖 이 거리까지는 유효 좌표로 인정 (라인 밖 스로인 등)
 HALF_LENGTH, HALF_WIDTH = 52.5, 34.0
 
@@ -195,7 +196,7 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
                   progress: Callable[[int, int], None] = lambda done, total: None,
                   max_frames: Optional[int] = None, stride: int = 1, mode: str = 'realtime',
                   line_store=None, postprocess: Optional[bool] = None,
-                  team_embedder=None, refiner=None) -> Dict:
+                  team_embedder=None, refiner=None, jersey_reader=None) -> Dict:
     """
     영상 전체를 분석해 결과 dict 반환
 
@@ -211,6 +212,8 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
         postprocess: 트랙 잇기·공백 보간·공 오탐 제거 (None 이면 precise 일 때만)
         team_embedder: 크롭 목록 → 임베딩 (pipeline.team_embed.SiglipEmbedder). 주면 평균색 대신
                        SigLIP2 + UMAP + K-Means 로 팀을 나눈다 (실패하면 평균색으로 대체)
+        jersey_reader: tracking.identity.GlmOcrReader. 주면 트랙마다 등·가슴 크롭을 모아 등번호를 읽고,
+                       같은 팀·번호이고 시간상 겹치지 않는 트랙을 같은 선수로 잇는다 (결과 identities, identity)
         refiner: tracking.sam_refiner.SamRefiner. 주면 선수 박스마다 SAM 마스크로 발 위치를 구해
                  객체 끝에 [.., 신뢰도, 발 x, 발 y] 로 붙인다 (경기장 좌표 계산에 사용)
     """
@@ -234,6 +237,10 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
     track_crops: Dict[int, List[np.ndarray]] = {}
     track_labels: Dict[int, Dict[str, int]] = {}
     sam_feet = 0
+    jersey_bank = None
+    if jersey_reader is not None:
+        from tracking.identity import JerseyCropBank, jersey_crop as number_crop
+        jersey_bank = JerseyCropBank()
     prev_boxes = []
     motion_estimator = CameraMotion()
     last_key = None  # 마지막 탐지 프레임 인덱스
@@ -283,6 +290,13 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
                             crop = jersey_crop(frame, o.bbox, m.mask if m is not None else None)
                             if crop is not None:
                                 crops.append(crop)
+                if jersey_bank is not None and idx % (JERSEY_SAMPLE_EVERY * stride) == 0:
+                    boxes = [o[2:6] for o in objs if o[1] == KIND_PLAYER]
+                    for o in objs:
+                        if o[1] == KIND_PLAYER and o[6] > 0:
+                            got = number_crop(frame, o[2:6], boxes)
+                            if got is not None:
+                                jersey_bank.add(o[0], idx, *got)
                 frames.append(objs)
                 if last_key is not None:  # 직전 탐지 프레임과의 사이를 보간으로 채움
                     for j in range(last_key + 1, idx):
@@ -305,6 +319,8 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
     if postprocess:
         from . import postprocess as pp
         stitched = pp.stitch_tracks(frames, motion, fps, track_colors)
+        if jersey_bank is not None:
+            jersey_bank.merge(stitched)
         for child, root in stitched.items():  # 이어 붙인 트랙의 크롭·라벨도 대표 ID 로 합침
             track_crops.setdefault(root, []).extend(track_crops.pop(child, []))
             merged = track_labels.setdefault(root, {})
@@ -332,6 +348,22 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
         teams, team_colors = cluster_teams({t: c for t, c in track_colors.items() if t not in special})
         teams = {**{t: 'other' for t in track_colors}, **teams}
     teams = {t: ('other' if t in special else team) for t, team in teams.items()}
+
+    identities, identity_info = None, None
+    if jersey_bank is not None:
+        from tracking.identity import identify
+        try:
+            referees = [t for t, lab in labels.items() if lab == 'referee']
+            keepers = [t for t, lab in labels.items() if lab == 'goalkeeper']
+            identities, relinked, details = identify(jersey_bank, jersey_reader, frames, teams, exclude=referees,
+                                                     goalkeepers=keepers)
+            for child, root in relinked.items():          # 재연결한 트랙의 팀·라벨은 대표 ID 로
+                teams.pop(child, None)
+                labels.pop(child, None)
+            identity_info = {'model': getattr(jersey_reader, 'model_id', None), **details['summary']}
+        except Exception as e:  # 모델 로드 실패 등 → 번호 없이 계속
+            print(f"등번호 인식 실패, 건너뜀: {e}")
+            identity_info = {'model': getattr(jersey_reader, 'model_id', None), 'error': str(e)}
     return {
         'version': 2,
         'mode': mode,
@@ -348,6 +380,9 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
         'team_colors': team_colors,
         # 트랙별 탐지 라벨 다수결 (축구 전용 탐지 모델: player | goalkeeper | referee, COCO 모델: person)
         'track_labels': {str(k): v for k, v in labels.items()},
+        # 트랙별 등번호 {jersey_number(미확정 None), confidence, evidence(일치한 판독 수), readings(읽은 크롭 수)}
+        'identities': None if identities is None else {str(k): v for k, v in identities.items()},
+        'identity': identity_info,
         'team_method': team_info,
         'sam': None if refiner is None else {'model': getattr(refiner, 'model_id', None), 'feet': sam_feet},
         'calibration': None,

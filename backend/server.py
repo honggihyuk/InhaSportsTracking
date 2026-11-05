@@ -298,15 +298,16 @@ def _run_analysis(name: str, mode: Optional[str] = None):
         # GPU 정밀 모델 (SigLIP2 팀 분류, SAM 마스크) — 분석이 끝나면 VRAM 을 돌려준다
         embedder = p.make_team_embedder() if profile.get("team_classifier") == "siglip" else None
         refiner = p.make_sam_refiner() if profile.get("sam_refine") else None
-        if embedder is not None or refiner is not None:
+        jersey = p.make_jersey_reader() if profile.get("jersey_ocr") and hasattr(p, "make_jersey_reader") else None
+        if embedder is not None or refiner is not None or jersey is not None:
             _release_agent()  # 질의용 VLM 이 GPU 를 잡고 있으면 먼저 내림
         try:
             result = video_analysis.analyze_video(
                 _video_file(name), det, tracker, stride=stride, mode=profile["mode"],
                 line_store=lines, postprocess=profile.get("postprocess"), progress=progress,
-                team_embedder=embedder, refiner=refiner)
+                team_embedder=embedder, refiner=refiner, jersey_reader=jersey)
         finally:
-            for m in (embedder, refiner):
+            for m in (embedder, refiner, jersey):
                 if m is not None:
                     m.unload()
         _lines_file(name).unlink(missing_ok=True)
