@@ -18,7 +18,8 @@ detection:
   backend: auto
   rfdetr:
     size: medium               # nano | small | medium | base | large (Apache 2.0)
-    checkpoint: null           # 파인튜닝 가중치 (scripts/train_rfdetr.py). null 이면 COCO 사전학습
+    checkpoint: models/rfdetr_football/checkpoint_best_total.pth  # 파인튜닝 가중치 (scripts/train_rfdetr.py, 저장소에 없음 → 없으면 COCO 사전학습으로 대체)
+    resolution: 960            # 파인튜닝 해상도 (checkpoint 가 없으면 무시해도 됨)
     confidence_threshold: 0.4  # 선수
     ball_threshold: 0.25       # 공 (작아서 점수가 낮게 나옴)
 
