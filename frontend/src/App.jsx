@@ -19,13 +19,17 @@ const DEFAULT_TIMELINE = 100 // s, 영상이 없을 때 타임라인 길이
 const POSSESSION_RADIUS = 3 // m, 공과 이 거리 이내의 가장 가까운 선수를 소유자로 간주
 const DRIFT_FRAMES = 15 // 영상과 트래킹 스트림이 이만큼 어긋나면 재동기화
 
+// index.css 의 토큰과 같은 값 (어두운 바탕 + 차분한 그린 강조, 공은 노랑)
 const COLORS = {
-  home: '#F2555A',
-  away: '#4C8DFF',
-  line: '#E9EEF2',
-  turfA: '#1C3B28',
-  turfB: '#19351F',
-  background: '#0A0B0D',
+  home: '#E5534B',
+  away: '#4A9BF0',
+  line: '#D9DFDB',
+  turfA: '#15291C',
+  turfB: '#132519',
+  surround: '#0C1610',
+  background: '#070908',
+  accent: '#34C77B',
+  ball: '#F2D64B',
 }
 
 // 백엔드 경기장 좌표 [x(길이), y(너비), z(높이)] → three.js 월드 좌표 [x, 높이, z]
@@ -52,6 +56,8 @@ const ICONS = {
   alert: <><circle cx="12" cy="12" r="9" /><path d="M12 7.5v5.5M12 16.5h.01" /></>,
   scan: <><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3" /><rect x="8" y="8" width="8" height="8" rx="1" /></>,
   target: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="2" /><path d="M12 2v4M12 18v4M2 12h4M18 12h4" /></>,
+  chevronLeft: <path d="m15 5-7 7 7 7" />,
+  chevronRight: <path d="m9 5 7 7-7 7" />,
 }
 function Icon({ name, size = 18 }) {
   return (
@@ -97,7 +103,7 @@ function FootballField() {
       {/* 경기장 바깥 여백 */}
       <mesh position={[0, 0, -0.01]}>
         <planeGeometry args={[FIELD_LENGTH + 12, FIELD_WIDTH + 10]} />
-        <meshStandardMaterial color="#132519" roughness={1} />
+        <meshStandardMaterial color={COLORS.surround} roughness={1} />
       </mesh>
       {Array.from({ length: STRIPES }, (_, i) => (
         <mesh key={i} position={[-L + stripeWidth * (i + 0.5), 0, 0]}>
@@ -136,13 +142,13 @@ function labelTexture(text) {
   const draw = () => {
     const ctx = canvas.getContext('2d')
     ctx.clearRect(0, 0, canvas.width, canvas.height)
-    ctx.font = '700 40px "Pretendard Variable", Pretendard, system-ui, sans-serif'
+    ctx.font = '700 46px "Big Shoulders Display Variable", "Pretendard Variable", system-ui, sans-serif'
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.lineWidth = 6
-    ctx.strokeStyle = '#000000'
+    ctx.strokeStyle = COLORS.background
     ctx.strokeText(text, 64, 34)
-    ctx.fillStyle = '#F2F3F5'
+    ctx.fillStyle = '#E9EEF3'
     ctx.fillText(text, 64, 34)
   }
   draw()
@@ -179,9 +185,9 @@ function BallMarker({ ball }) {
     <group position={[x, y + 0.35, z]}>
       <mesh>
         <sphereGeometry args={[0.35, 24, 24]} />
-        <meshStandardMaterial color="#FFFFFF" emissive="#D7FF3C" emissiveIntensity={0.35} />
+        <meshStandardMaterial color="#FFFFFF" emissive={COLORS.ball} emissiveIntensity={0.35} />
       </mesh>
-      <pointLight color="#D7FF3C" intensity={2} distance={6} decay={2} />
+      <pointLight color={COLORS.ball} intensity={2} distance={6} decay={2} />
     </group>
   )
 }
@@ -241,7 +247,8 @@ function Scene({ players, ball, cameraMode, teamColors }) {
 }
 
 /* ---------- 통계 ---------- */
-function possessionTeam(players, ball) {
+// 공과 POSSESSION_RADIUS 이내에서 가장 가까운 선수 (공 소유 선수)
+function ballCarrier(players, ball) {
   if (!ball) return null
   const [bx, by] = ball.position_3d
   let best = null
@@ -251,7 +258,7 @@ function possessionTeam(players, ball) {
     const d = Math.hypot(p.position_3d[0] - bx, p.position_3d[1] - by)
     if (d <= bestDist) [best, bestDist] = [p, d]
   }
-  return best?.team ?? null
+  return best
 }
 
 function teamStats(players, team) {
@@ -287,8 +294,7 @@ const MODES = [
 const STATE_LABEL = { none: '분석 전', queued: '대기 중', done: '완료', error: '오류', cancelled: '취소됨' }
 const STAGE_LABEL = { analyzing: '분석 중', lines: '라인 검출 중', calibrating: '자동 보정 중' }
 
-function AnalysisCard({ status, summary, mode, onMode, showBoxes, onToggleBoxes, showLines, onToggleLines,
-  onStart, onCancel, onCalibrate, onAutoCalibrate }) {
+function AnalysisCard({ status, summary, mode, onMode, onStart, onCancel, onCalibrate, onAutoCalibrate }) {
   const state = status?.state ?? 'none'
   const pct = Math.round((status?.progress ?? 0) * 100)
   const doneMode = status?.mode ?? summary?.mode
@@ -348,16 +354,6 @@ function AnalysisCard({ status, summary, mode, onMode, showBoxes, onToggleBoxes,
           {status?.auto_calibration?.status === 'failed' && !summary.calibratedPct && (
             <p className="card-text warn-text">{status.auto_calibration.reason}</p>
           )}
-          <label className="switch">
-            <input type="checkbox" checked={showBoxes} onChange={onToggleBoxes} />
-            <span>영상에 탐지 박스 표시</span>
-          </label>
-          {summary.calibratedPct > 0 && (
-            <label className="switch">
-              <input type="checkbox" checked={showLines} onChange={onToggleLines} />
-              <span>보정된 경기장 라인 표시</span>
-            </label>
-          )}
           {summary.calibratedPct < 100 && (
             <button className={`btn btn-block ${summary.calibratedPct ? 'btn-ghost' : 'btn-primary'}`} onClick={onAutoCalibrate}>
               <Icon name="scan" size={15} />{summary.calibratedPct ? '자동 보정 다시 실행' : '자동 보정'}
@@ -377,59 +373,111 @@ function AnalysisCard({ status, summary, mode, onMode, showBoxes, onToggleBoxes,
   )
 }
 
-/* ---------- 경기 지표 카드 (고정밀 모드 + 보정 후) ---------- */
+/* ---------- 이벤트 ---------- */
 const EVENT_LABEL = { pass: '패스', turnover: '턴오버', sprint: '스프린트' }
+const EVENT_TYPES = ['pass', 'turnover', 'sprint']
+const EVENT_HOLD_S = 1.5 // s, 이벤트가 지난 뒤에도 스테이지 제목에 남겨 두는 시간
 
-function MatchStatsCard({ stats, fps, teamColors, onSeek, currentFrame }) {
-  const [tab, setTab] = useState('players')
-  const players = Object.entries(stats.players)
-    .filter(([, p]) => p.team !== 'other' && p.seconds >= 1)
-    .sort((a, b) => b[1].distance - a[1].distance)
-  const { home, away } = stats.teams
-  const t = (f) => formatTime(f / fps)
+const eventText = (e) => (e.type === 'sprint'
+  ? `#${e.player} 스프린트 · 최고 ${e.max_speed.toFixed(1)} m/s`
+  : `${EVENT_LABEL[e.type]} · #${e.from} → #${e.to}`)
+
+/* ---------- 오른쪽 큐: 이벤트 목록 / 영상 라이브러리 ---------- */
+function QueuePanel({ tab, onTab, stats, events, filter, onFilter, currentFrame, fps, teamColors, onSeek,
+  videos, source, onSelect, onUpload, upload }) {
+  const all = stats?.events ?? []
+  const count = (type) => all.filter((e) => e.type === type).length
   return (
-    <section className="card stats-card" style={{ '--home': teamColors.home, '--away': teamColors.away }}>
+    <section className="card queue-panel">
       <div className="card-head">
-        <div className="eyebrow">경기 지표</div>
-        <span className="tag tag-done">고정밀</span>
+        <div className="eyebrow">큐</div>
+        <Segmented label="큐 보기" value={tab} onChange={onTab} options={[['events', '이벤트'], ['library', '영상']]} />
       </div>
-      <CompareRow label="점유율 %" home={home.possession * 100} away={away.possession * 100} format={(v) => v.toFixed(0)} />
-      <CompareRow label="이동 거리 m" home={home.distance} away={away.distance} format={(v) => v.toFixed(0)} />
-      <CompareRow label="스프린트" home={home.sprints} away={away.sprints} />
-      <CompareRow label="패스" home={home.passes} away={away.passes} />
-      <Segmented label="지표 보기" value={tab} onChange={setTab} options={[['players', '선수'], ['events', '이벤트']]} />
-      {tab === 'players' ? (
-        <table className="stats-table num">
-          <thead><tr><th>ID</th><th>거리 m</th><th>최고 m/s</th><th>스프린트</th></tr></thead>
-          <tbody>
-            {players.slice(0, 12).map(([id, p]) => (
-              <tr key={id}>
-                <td><span className="team-dot" style={{ background: teamColors[p.team] }} />#{id}
-                  {p.role === 'goalkeeper' && <small> GK</small>}</td>
-                <td>{p.distance.toFixed(0)}</td><td>{p.max_speed.toFixed(1)}</td><td>{p.sprints.length}</td>
-              </tr>
+
+      {tab === 'events' ? (
+        <>
+          <div className="fields">
+            <label className="field">
+              <span className="field-label">유형</span>
+              <select className="select" value={filter.type} onChange={(e) => onFilter({ ...filter, type: e.target.value })}
+                disabled={!stats}>
+                <option value="all">전체 ({all.length})</option>
+                {EVENT_TYPES.map((t) => <option key={t} value={t}>{EVENT_LABEL[t]} ({count(t)})</option>)}
+              </select>
+            </label>
+            <label className="field">
+              <span className="field-label">팀</span>
+              <select className="select" value={filter.team} onChange={(e) => onFilter({ ...filter, team: e.target.value })}
+                disabled={!stats}>
+                <option value="all">전체</option>
+                <option value="home">홈</option>
+                <option value="away">원정</option>
+              </select>
+            </label>
+          </div>
+          <div className="list-head">
+            <span>{source ? source.name : '영상 없음'}</span>
+            <span className="num">{events.length}</span>
+          </div>
+          <ul className="queue-list">
+            {!stats && (
+              <li className="queue-empty">경기 지표(패스·턴오버·스프린트)는 고정밀 분석 후 경기장 보정이 끝나면 생성됩니다.</li>
+            )}
+            {stats && events.length === 0 && <li className="queue-empty">조건에 맞는 이벤트가 없습니다.</li>}
+            {events.map((e, i) => (
+              <li key={`${e.type}-${e.frame}-${i}`}>
+                <button className={currentFrame >= e.frame && currentFrame <= (e.end_frame ?? e.frame) ? 'active' : ''}
+                  onClick={() => onSeek(e.frame / fps)}>
+                  <span className="row-time num">{formatTime(e.frame / fps)}</span>
+                  <span className="row-text">{eventText(e)}</span>
+                  <span className="row-team" style={{ '--team': teamColors[e.team] ?? teamColors.other }}>
+                    {e.team === 'home' ? 'HOME' : e.team === 'away' ? 'AWAY' : '–'}
+                  </span>
+                </button>
+              </li>
             ))}
-          </tbody>
-        </table>
+          </ul>
+        </>
       ) : (
-        <ul className="event-list">
-          {stats.events.length === 0 && <li className="muted small">감지된 이벤트가 없습니다.</li>}
-          {stats.events.slice(0, 60).map((e, i) => (
-            <li key={i}>
-              <button className={currentFrame >= e.frame && currentFrame <= (e.end_frame ?? e.frame) ? 'active' : ''}
-                onClick={() => onSeek(e.frame / fps)}>
-                <span className="num muted">{t(e.frame)}</span>
-                <span className="team-dot" style={{ background: teamColors[e.team] ?? teamColors.other }} />
-                <span>{EVENT_LABEL[e.type]}</span>
-                <span className="num muted">
-                  {e.type === 'sprint' ? `#${e.player} ${e.max_speed.toFixed(1)} m/s` : `#${e.from} → #${e.to}`}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
+        <>
+          <div className="list-head">
+            <span>업로드된 경기 영상</span>
+            <label className="btn btn-ghost" title="영상 업로드">
+              <Icon name="upload" size={14} />업로드
+              <input type="file" accept="video/*" hidden onChange={onUpload} />
+            </label>
+          </div>
+          {upload && <p className={`upload-status ${upload.status}`}>{upload.message}</p>}
+          <ul className="queue-list">
+            {videos.length === 0 && <li className="queue-empty">업로드된 영상이 없습니다.</li>}
+            {videos.map((v) => (
+              <li key={v.name}>
+                <button className={source?.name === v.name ? 'active' : ''} onClick={() => onSelect(v)}>
+                  <Icon name="film" size={15} />
+                  <span className="row-text">{v.name}</span>
+                  <span className="row-time num">{v.analyzed ? '분석됨 · ' : ''}{formatSize(v.size)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </section>
+  )
+}
+
+/* ---------- 화면 요소 설명 (접이식) ---------- */
+function ExplainPanel() {
+  return (
+    <details className="card explain">
+      <summary className="eyebrow">화면 요소 설명</summary>
+      <p><strong>탐지 박스</strong>: 영상에서 자동 탐지·추적한 선수(팀 색, <code>#ID</code>)와 공(<code>BALL</code>). 점선 박스는 가려진 구간을 후처리로 이어 붙인 위치입니다.</p>
+      <p><strong>팀 분류</strong>: 유니폼 색(또는 GPU 에서는 SigLIP2 임베딩)으로 홈·원정·기타(심판 등)를 나눕니다.</p>
+      <p><strong>경기장 보정</strong>: 경기장 라인으로 화면 좌표를 경기장 좌표(미터)로 바꿉니다. 보정된 라인을 켜서 영상의 흰 라인과 겹치는지 확인할 수 있습니다. 보정이 끊긴 구간은 3D 트윈이 비어 있습니다.</p>
+      <p><strong>패스 · 턴오버</strong>: 공에서 1.5 m 이내의 가장 가까운 선수가 3 프레임 이상 이어지면 소유자로 보고, 소유자가 같은 팀 선수로 바뀌면 패스, 상대 팀으로 바뀌면 턴오버입니다.</p>
+      <p><strong>스프린트</strong>: 7 m/s(약 25 km/h) 이상으로 1 초 이상 달린 구간입니다.</p>
+      <p className="muted">모두 규칙 기반 자동 추정이라 일부는 틀릴 수 있습니다.</p>
+    </details>
   )
 }
 
@@ -459,8 +507,42 @@ function summarize(data) {
   }
 }
 
-// referee: 축구 전용 탐지 모델이 심판으로 본 트랙 (분석 결과 roles)
-const DEFAULT_TEAM_COLORS = { home: COLORS.home, away: COLORS.away, other: '#9AA3AD', referee: '#F2C14E' }
+// referee: 축구 전용 탐지 모델이 심판으로 본 트랙 (분석 결과 roles).
+// 공(노랑)과 헷갈리지 않도록 보라 계열
+const DEFAULT_TEAM_COLORS = { home: COLORS.home, away: COLORS.away, other: '#98A39D', referee: '#B58CE0' }
+
+function HeroStat({ value, label }) {
+  return (
+    <div className="hero-stat">
+      <b className="num">{value}</b>
+      <span>{label}</span>
+    </div>
+  )
+}
+
+/* 출전 선수 띠: 현재 프레임에 보이는 선수 (공 가진 선수는 흰 테두리) */
+function Roster({ players, carrierId, teamColors }) {
+  const group = (team) => players.filter((p) => p.team === team && p.role !== 'referee').sort((a, b) => a.id - b.id)
+  return (
+    <div className="roster">
+      {['home', 'away'].map((team) => (
+        <div key={team} className="roster-team" style={{ '--team': teamColors[team] }}>
+          <span className="roster-name">{team === 'home' ? 'HOME' : 'AWAY'}</span>
+          <div className="roster-players">
+            {group(team).length === 0 && <span className="muted small">–</span>}
+            {group(team).map((p) => (
+              <span key={p.id} className={`pl ${p.id === carrierId ? 'carrier' : ''}`}
+                title={`#${p.id} · ${p.velocity.toFixed(1)} m/s`}>
+                <span className="pl-num num">{p.id}</span>
+                <span className="pl-speed num">{p.velocity.toFixed(1)}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 /* ---------- 앱 ---------- */
 function App() {
@@ -478,6 +560,9 @@ function App() {
   const [runMode, setRunMode] = useState('precise') // 분석 시작 시 선택한 모드
   const [calib, setCalib] = useState(null) // 보정 모드 {frame, points, activeId, saving, error}
   const [upload, setUpload] = useState(null)
+  const [queueTab, setQueueTab] = useState(null) // null = 경기 지표가 있으면 이벤트, 없으면 영상
+  const [eventFilter, setEventFilter] = useState({ type: 'all', team: 'all' })
+  const [statsTab, setStatsTab] = useState('teams')
   const videoRef = useRef(null)
   const frameRef = useRef(0)
 
@@ -505,7 +590,19 @@ function App() {
 
   const home = teamStats(players, 'home')
   const away = teamStats(players, 'away')
-  const owner = possessionTeam(players, ball)
+  const carrier = ballCarrier(players, ball)
+  const owner = carrier?.team ?? null
+
+  // 이벤트 큐: 경기 지표가 있을 때만 (고정밀 분석 + 보정)
+  const stats = analysisMode ? analysis.data?.stats ?? null : null
+  const events = useMemo(() => (stats?.events ?? []).filter((e) =>
+    (eventFilter.type === 'all' || e.type === eventFilter.type)
+    && (eventFilter.team === 'all' || e.team === eventFilter.team)), [stats, eventFilter])
+  let eventIdx = -1 // 현재 프레임 이전의 마지막 이벤트
+  for (let i = 0; i < events.length && events[i].frame <= currentFrame; i++) eventIdx = i
+  const recentEvent = eventIdx >= 0 && currentFrame <= (events[eventIdx].end_frame ?? events[eventIdx].frame) + EVENT_HOLD_S * fps
+    ? events[eventIdx] : null
+  const tab = queueTab ?? (stats ? 'events' : 'library')
 
   const refreshVideos = useCallback(async () => {
     try {
@@ -643,6 +740,10 @@ function App() {
     sendCommand({ type: 'seek', frame: Math.round(seconds * FPS), paused: !streamPlaying })
   }
 
+  // 이벤트 사이 이동 (스테이지 머리의 ‹ ›)
+  const prevEvent = [...events].reverse().find((e) => e.frame < currentFrame)
+  const nextEvent = events.find((e) => e.frame > currentFrame)
+
   const handleUpload = async (e) => {
     const file = e.target.files?.[0]
     e.target.value = '' // 같은 파일 재선택 허용
@@ -723,122 +824,198 @@ function App() {
   const transportDisabled = calibrating || (!connected && !videoMaster)
   const statusLabel = !connected && !analysisMode ? 'OFFLINE'
     : playing ? (analysisMode ? 'PLAYING' : 'LIVE') : 'PAUSED'
+  const modeLabel = summary ? (summary.mode === 'precise' ? '고정밀 분석' : '빠른 미리보기') : '분석 전'
+  const dash = '–'
+  const teamVars = { '--home': teamColors.home, '--away': teamColors.away }
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="brand">
+    <div className="app" style={teamVars}>
+      {/* ---------- 히어로: 제목 · 요약 수치 · 상태 ---------- */}
+      <header className="hero">
+        <div className="hero-info">
           <span className="brand-mark" aria-hidden="true" />
           <div>
-            <div className="brand-overline">SOCCER ANALYTICS</div>
-            <div className="brand-name">Digital Twin</div>
+            <h1 className="hero-name">Soccer Digital Twin</h1>
+            <div className="hero-sub">경기 영상 분석 · 3D 디지털 트윈 · {modeLabel}</div>
           </div>
         </div>
-
-        <Segmented label="화면 구성" value={layout} onChange={setLayout} options={[
-          ['split', '분할', 'split'],
-          ['video', '경기 영상', 'film'],
-          ['twin', '3D 트윈', 'cube'],
-        ]} />
-
-        <div className={`status-pill ${statusLabel === 'OFFLINE' ? 'off' : playing ? 'live' : 'idle'}`}>
-          <span className="dot" />
-          {statusLabel}
+        <div className="hero-stats">
+          <HeroStat value={summary?.players ?? dash} label="추적 선수" />
+          <HeroStat value={summary ? `${summary.ballPct}%` : dash} label="공 검출" />
+          <HeroStat value={summary ? `${summary.calibratedPct}%` : dash} label="경기장 보정" />
+          <HeroStat value={stats ? stats.events.length : dash} label="이벤트" />
+        </div>
+        <div className="hero-actions">
+          <div className={`status-pill ${statusLabel === 'OFFLINE' ? 'off' : playing ? 'live' : 'idle'}`}>
+            <span className="dot" />
+            {statusLabel}
+          </div>
+          <label className="btn btn-ghost">
+            <Icon name="upload" size={14} />영상 업로드
+            <input type="file" accept="video/*" hidden onChange={handleUpload} />
+          </label>
         </div>
       </header>
 
-      <main className="workspace">
-        <section className={`stage layout-${layout}`}>
-          {/* 경기 영상: 3D 전용 화면에서도 기준 시계 역할을 하도록 숨기기만 함 */}
-          <div className="pane pane-video">
-            <div className="pane-label"><Icon name="film" size={14} />경기 영상</div>
-            {source ? (
-              <>
-                <video key={source.url} ref={videoRef} src={source.url} preload="metadata"
-                  playsInline onClick={calibrating ? undefined : togglePlay} {...videoHandlers} />
-                {analysisMode && (
-                  <VideoOverlay analysis={analysis.data} frameIndex={videoFrame} teamColors={teamColors}
-                    showBoxes={showBoxes} showLines={showLines}
-                    calibration={calib && { points: calib.points, activeId: calib.activeId, onPick: pickPoint }} />
-                )}
-                {!video.ready && !video.error && <div className="pane-center muted">영상 불러오는 중</div>}
-                {video.error && (
-                  <div className="pane-center">
-                    <Icon name="alert" size={28} />
-                    <p className="pane-title">{source.name}</p>
-                    <p className="muted">{video.error}</p>
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="pane-center">
-                <Icon name="film" size={32} />
-                <p className="pane-title">경기 영상을 선택하세요</p>
-                <p className="muted">라이브러리에서 선택하거나 새 영상을 업로드한 뒤<br />분석하면 탐지 박스와 3D 트윈이 영상에 맞춰 재생됩니다.</p>
-                <label className="btn btn-primary">
-                  <Icon name="upload" size={16} />영상 업로드
-                  <input type="file" accept="video/*" hidden onChange={handleUpload} />
-                </label>
+      <div className="notice">
+        <span className="tag tag-auto">AUTO</span>
+        <p>선수·공 위치는 경기 영상에서 <strong>자동으로 탐지·추적</strong>한 결과이고, 팀 분류와 이벤트(패스·턴오버·스프린트)는 규칙 기반 추정이라 일부 틀릴 수 있습니다. 경기장 보정이 끊긴 구간은 3D 트윈이 비어 있습니다. 판정 기준은 오른쪽 <em>화면 요소 설명</em>에 있습니다.</p>
+      </div>
+
+      <main className="grid">
+        {/* ---------- 스테이지: 영상 + 3D 트윈 ---------- */}
+        <section className="card stage-panel">
+          <div className="stage-head">
+            <div className="stage-title-wrap">
+              <h2 className="stage-title">{recentEvent ? eventText(recentEvent) : (source ? source.name : '경기 영상을 선택하세요')}</h2>
+              <div className="stage-sub num">
+                {videoMaster ? source.name : '트래킹 스트림'} · {formatTime(currentTime)} · FRAME {currentFrame.toLocaleString()}
+              </div>
+            </div>
+            {stats && (
+              <div className="counter">
+                <button className="nav-btn" onClick={() => prevEvent && seekTo(prevEvent.frame / fps)}
+                  disabled={!prevEvent || transportDisabled} aria-label="이전 이벤트"><Icon name="chevronLeft" size={16} /></button>
+                <span className="num"><b>{Math.max(eventIdx + 1, 0)}</b> / {events.length}</span>
+                <button className="nav-btn" onClick={() => nextEvent && seekTo(nextEvent.frame / fps)}
+                  disabled={!nextEvent || transportDisabled} aria-label="다음 이벤트"><Icon name="chevronRight" size={16} /></button>
               </div>
             )}
           </div>
 
-          <div className="pane pane-twin">
-            <div className="pane-label">
-              <Icon name="cube" size={14} />3D 디지털 트윈
-              <span className={`source-chip ${analysisMode && calibrated ? 'real' : ''}`}>
-                {analysisMode ? (calibrated ? '분석 데이터' : '보정 필요') : '더미 데이터'}
-              </span>
-            </div>
-            <div className="pane-tools">
-              <Segmented label="카메라" value={cameraMode} onChange={setCameraMode} options={[
-                ['3d', '자유 시점'],
-                ['topdown', '탑다운'],
-                ['player', '선수 시점'],
-              ]} />
-            </div>
-            {/* demand: 데이터·카메라가 바뀔 때만 다시 그림 (정지 화면에서 CPU/GPU 를 쓰지 않음) */}
-            <Canvas frameloop="demand" dpr={[1, 2]} camera={{ position: CAMERA_PRESETS['3d'], fov: 45 }}>
-              <Scene players={players} ball={ball} cameraMode={cameraMode} teamColors={teamColors} />
-            </Canvas>
-            {analysisMode && !calibrated && !calibrating && (
-              <div className="pane-center overlay">
-                <Icon name="target" size={28} />
-                <p className="pane-title">경기장 보정 후 3D 트윈에 연동됩니다</p>
-                <p className="muted">자동 보정은 화면의 경기장 라인·센터서클로 기준점 없이 보정합니다.<br />
-                  잘 안 되면 영상에서 기준점 4 곳 이상을 직접 지정하세요.</p>
-                <div className="btn-row">
-                  <button className="btn btn-primary" onClick={handleAutoCalibrate}>
-                    <Icon name="scan" size={16} />자동 보정
-                  </button>
-                  <button className="btn btn-ghost" onClick={startCalibration}>
-                    <Icon name="target" size={16} />직접 지정
-                  </button>
+          <div className={`stage layout-${layout}`}>
+            {/* 경기 영상: 3D 전용 화면에서도 기준 시계 역할을 하도록 숨기기만 함 */}
+            <div className="pane pane-video">
+              <div className="pane-label"><Icon name="film" size={13} />경기 영상</div>
+              {source ? (
+                <>
+                  <video key={source.url} ref={videoRef} src={source.url} preload="metadata"
+                    playsInline onClick={calibrating ? undefined : togglePlay} {...videoHandlers} />
+                  {analysisMode && (
+                    <VideoOverlay analysis={analysis.data} frameIndex={videoFrame} teamColors={teamColors}
+                      showBoxes={showBoxes} showLines={showLines}
+                      calibration={calib && { points: calib.points, activeId: calib.activeId, onPick: pickPoint }} />
+                  )}
+                  {!video.ready && !video.error && <div className="pane-center muted">영상 불러오는 중</div>}
+                  {video.error && (
+                    <div className="pane-center">
+                      <Icon name="alert" size={28} />
+                      <p className="pane-title">{source.name}</p>
+                      <p className="muted">{video.error}</p>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="pane-center">
+                  <Icon name="film" size={32} />
+                  <p className="pane-title">경기 영상을 선택하세요</p>
+                  <p className="muted">오른쪽 큐의 영상 목록에서 선택하거나 새 영상을 업로드한 뒤<br />분석하면 탐지 박스와 3D 트윈이 영상에 맞춰 재생됩니다.</p>
+                  <label className="btn btn-primary">
+                    <Icon name="upload" size={16} />영상 업로드
+                    <input type="file" accept="video/*" hidden onChange={handleUpload} />
+                  </label>
                 </div>
+              )}
+            </div>
+
+            <div className="pane pane-twin">
+              <div className="pane-label">
+                <Icon name="cube" size={13} />3D 디지털 트윈
+                <span className={`source-chip ${analysisMode && calibrated ? 'real' : ''}`}>
+                  {analysisMode ? (calibrated ? '분석 데이터' : '보정 필요') : '더미 데이터'}
+                </span>
               </div>
+              {/* demand: 데이터·카메라가 바뀔 때만 다시 그림 (정지 화면에서 CPU/GPU 를 쓰지 않음) */}
+              <Canvas frameloop="demand" dpr={[1, 2]} camera={{ position: CAMERA_PRESETS['3d'], fov: 45 }}>
+                <Scene players={players} ball={ball} cameraMode={cameraMode} teamColors={teamColors} />
+              </Canvas>
+              {analysisMode && !calibrated && !calibrating && (
+                <div className="pane-center overlay">
+                  <Icon name="target" size={28} />
+                  <p className="pane-title">경기장 보정 후 3D 트윈에 연동됩니다</p>
+                  <p className="muted">자동 보정은 화면의 경기장 라인·센터서클로 기준점 없이 보정합니다.<br />
+                    잘 안 되면 영상에서 기준점 4 곳 이상을 직접 지정하세요.</p>
+                  <div className="btn-row">
+                    <button className="btn btn-primary" onClick={handleAutoCalibrate}>
+                      <Icon name="scan" size={16} />자동 보정
+                    </button>
+                    <button className="btn btn-ghost" onClick={startCalibration}>
+                      <Icon name="target" size={16} />직접 지정
+                    </button>
+                  </div>
+                </div>
+              )}
+              {analysisMode && calibrated && !twin && (
+                <div className="pane-note">이 구간은 카메라 전환으로 보정이 끊겼습니다. 이 구간에서 보정을 추가하세요.</div>
+              )}
+              {!connected && !analysisMode && (
+                <div className="pane-center overlay">
+                  <Icon name="alert" size={28} />
+                  <p className="pane-title">트래킹 서버에 연결할 수 없습니다</p>
+                  <p className="muted">백엔드(localhost:8000) 실행 후 새로고침하세요.</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <Roster players={players} carrierId={carrier?.id} teamColors={teamColors} />
+
+          {/* 재생 컨트롤 */}
+          <div className="controls">
+            <button className="play-btn" onClick={togglePlay} disabled={transportDisabled}
+              aria-label={playing ? '일시정지' : '재생'}>
+              <Icon name={playing ? 'pause' : 'play'} size={15} />
+              <span>{playing ? 'PAUSE' : 'PLAY'}</span>
+            </button>
+            <button className="icon-btn" onClick={() => seekTo(0)} disabled={transportDisabled} aria-label="처음으로">
+              <Icon name="restart" size={16} />
+            </button>
+            <input type="range" className="scrubber" min="0" max={duration || DEFAULT_TIMELINE} step="0.01"
+              value={Math.min(currentTime, duration || DEFAULT_TIMELINE)}
+              style={{ '--progress': `${progress}%` }}
+              onChange={(e) => seekTo(parseFloat(e.target.value))}
+              disabled={transportDisabled} aria-label="타임라인" />
+            <span className="time num">{formatTime(currentTime)} / {formatTime(duration)}</span>
+          </div>
+
+          {/* 화면 도구 */}
+          <div className="toolbar">
+            <Segmented label="화면 구성" value={layout} onChange={setLayout} options={[
+              ['split', '분할', 'split'],
+              ['video', '영상', 'film'],
+              ['twin', '3D', 'cube'],
+            ]} />
+            <Segmented label="카메라" value={cameraMode} onChange={setCameraMode} options={[
+              ['3d', '자유 시점'],
+              ['topdown', '탑다운'],
+              ['player', '선수 시점'],
+            ]} />
+            <span className="toolbar-spacer" />
+            {analysisMode && (
+              <>
+                <label className="switch">
+                  <input type="checkbox" checked={showBoxes} onChange={() => setShowBoxes((s) => !s)} />
+                  <span>탐지 박스</span>
+                </label>
+                {summary?.calibratedPct > 0 && (
+                  <label className="switch">
+                    <input type="checkbox" checked={showLines} onChange={() => setShowLines((s) => !s)} />
+                    <span>경기장 라인</span>
+                  </label>
+                )}
+              </>
             )}
-            {analysisMode && calibrated && !twin && (
-              <div className="pane-note">이 구간은 카메라 전환으로 보정이 끊겼습니다. 이 구간에서 보정을 추가하세요.</div>
-            )}
-            {!connected && !analysisMode && (
-              <div className="pane-center overlay">
-                <Icon name="alert" size={28} />
-                <p className="pane-title">트래킹 서버에 연결할 수 없습니다</p>
-                <p className="muted">백엔드(localhost:8000) 실행 후 새로고침하세요.</p>
-              </div>
-            )}
+          </div>
+          <div className="legend">
+            <span><i style={{ background: teamColors.home }} />홈</span>
+            <span><i style={{ background: teamColors.away }} />원정</span>
+            <span><i className="ball" />공</span>
+            <span className="muted">흰 테두리: 공을 가진 선수 · 숫자 아래: 속도 m/s</span>
           </div>
         </section>
 
-        <aside className="rail">
-          <section className="card clock-card">
-            <div className="eyebrow">경기 시간</div>
-            <div className="clock num">{formatTime(currentTime)}</div>
-            <div className="meta num">
-              FRAME {currentFrame.toLocaleString()} · {Math.round(videoMaster ? fps : FPS)} FPS
-            </div>
-          </section>
-
+        {/* ---------- 오른쪽: 분석 / 보정 · 큐 · 설명 ---------- */}
+        <aside className="side">
           {calibrating ? (
             <CalibrationPanel frame={calib.frame} points={calib.points} activeId={calib.activeId}
               saving={calib.saving} error={calib.error}
@@ -847,91 +1024,88 @@ function App() {
               onSave={saveCalib} onCancel={() => setCalib(null)} />
           ) : source && !video.error && (
             <AnalysisCard status={analysis.status} summary={summary} mode={runMode} onMode={setRunMode}
-              showBoxes={showBoxes} onToggleBoxes={() => setShowBoxes((s) => !s)}
-              showLines={showLines} onToggleLines={() => setShowLines((s) => !s)}
               onStart={handleStartAnalysis} onCancel={handleCancelAnalysis} onCalibrate={startCalibration}
               onAutoCalibrate={handleAutoCalibrate} />
           )}
 
-          {analysisMode && analysis.data?.stats && !calibrating && (
-            <MatchStatsCard stats={analysis.data.stats} fps={fps} teamColors={teamColors}
-              onSeek={seekTo} currentFrame={videoFrame} />
+          <QueuePanel tab={tab} onTab={setQueueTab} stats={stats} events={events} filter={eventFilter}
+            onFilter={setEventFilter} currentFrame={currentFrame} fps={fps} teamColors={teamColors}
+            onSeek={seekTo} videos={videos} source={source} onSelect={selectSource} onUpload={handleUpload}
+            upload={upload} />
+
+          <ExplainPanel />
+        </aside>
+
+        {/* ---------- 스테이지 아래: 실시간 · 경기 지표 · 질의 ---------- */}
+        <section className="below">
+          <section className="card live-card">
+            <div className="card-head">
+              <div className="eyebrow">실시간</div>
+              <span className="tag">{statusLabel}</span>
+            </div>
+            <div className="live-top">
+              <div>
+                <div className="field-label">경기 시간</div>
+                <div className="clock num">{formatTime(currentTime)}</div>
+              </div>
+              <div className="possession">
+                <div className="field-label">볼 소유</div>
+                <strong className={owner ?? ''}>
+                  {owner === 'home' ? '홈' : owner === 'away' ? '원정' : '경합'}
+                  {carrier && <small className="num"> #{carrier.id}</small>}
+                </strong>
+              </div>
+            </div>
+            <CompareRow label="선수" home={home.count} away={away.count} />
+            <CompareRow label="평균 속도 m/s" home={home.avg} away={away.avg} format={(v) => v.toFixed(1)} />
+            <CompareRow label="최고 속도 m/s" home={home.max} away={away.max} format={(v) => v.toFixed(1)} />
+            <div className="kv"><span>볼 속도</span><strong className="num">{ball ? ball.velocity.toFixed(1) : dash}<small> m/s</small></strong></div>
+            <div className="kv">
+              <span>볼 위치 (x, y)</span>
+              <strong className="num">{ball ? `${ball.position_3d[0].toFixed(1)}, ${ball.position_3d[1].toFixed(1)}` : dash}<small> m</small></strong>
+            </div>
+          </section>
+
+          {stats && !calibrating && (
+            <section className="card stats-card">
+              <div className="card-head">
+                <div className="eyebrow">경기 지표</div>
+                <Segmented label="지표 보기" value={statsTab} onChange={setStatsTab} options={[['teams', '팀'], ['players', '선수']]} />
+              </div>
+              {statsTab === 'teams' ? (
+                <>
+                  <CompareRow label="점유율 %" home={stats.teams.home.possession * 100} away={stats.teams.away.possession * 100} format={(v) => v.toFixed(0)} />
+                  <CompareRow label="이동 거리 m" home={stats.teams.home.distance} away={stats.teams.away.distance} format={(v) => v.toFixed(0)} />
+                  <CompareRow label="스프린트" home={stats.teams.home.sprints} away={stats.teams.away.sprints} />
+                  <CompareRow label="패스" home={stats.teams.home.passes} away={stats.teams.away.passes} />
+                  <CompareRow label="턴오버" home={stats.teams.home.turnovers} away={stats.teams.away.turnovers} />
+                </>
+              ) : (
+                <table className="stats-table num">
+                  <thead><tr><th>ID</th><th>거리 m</th><th>최고 m/s</th><th>스프린트</th></tr></thead>
+                  <tbody>
+                    {Object.entries(stats.players)
+                      .filter(([, p]) => p.team !== 'other' && p.seconds >= 1)
+                      .sort((a, b) => b[1].distance - a[1].distance)
+                      .slice(0, 12)
+                      .map(([id, p]) => (
+                        <tr key={id}>
+                          <td><span className="team-dot" style={{ background: teamColors[p.team] }} />#{id}
+                            {p.role === 'goalkeeper' && <small> GK</small>}</td>
+                          <td>{p.distance.toFixed(0)}</td><td>{p.max_speed.toFixed(1)}</td><td>{p.sprints.length}</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              )}
+            </section>
           )}
 
           {analysisMode && !calibrating && (
             <AskPanel key={source.name} name={source.name} fps={fps} onSeek={seekTo} />
           )}
-
-          <section className="card" style={{ '--home': teamColors.home, '--away': teamColors.away }}>
-            <div className="teams">
-              <span className="team home">HOME</span>
-              <span className="possession">
-                <span className="eyebrow">볼 소유</span>
-                <strong className={owner ?? ''}>{owner === 'home' ? '홈' : owner === 'away' ? '원정' : '경합'}</strong>
-              </span>
-              <span className="team away">AWAY</span>
-            </div>
-            <CompareRow label="선수" home={home.count} away={away.count} />
-            <CompareRow label="평균 속도 m/s" home={home.avg} away={away.avg} format={(v) => v.toFixed(1)} />
-            <CompareRow label="최고 속도 m/s" home={home.max} away={away.max} format={(v) => v.toFixed(1)} />
-          </section>
-
-          <section className="card">
-            <div className="eyebrow">볼</div>
-            <div className="kv">
-              <span>속도</span><strong className="num">{ball ? ball.velocity.toFixed(1) : '–'}<small> m/s</small></strong>
-            </div>
-            <div className="kv">
-              <span>위치 (x, y)</span>
-              <strong className="num">{ball ? `${ball.position_3d[0].toFixed(1)}, ${ball.position_3d[1].toFixed(1)}` : '–'}<small> m</small></strong>
-            </div>
-          </section>
-
-          <section className="card library">
-            <div className="library-head">
-              <div className="eyebrow">경기 영상 라이브러리</div>
-              <label className="btn btn-ghost" title="영상 업로드">
-                <Icon name="upload" size={15} />업로드
-                <input type="file" accept="video/*" hidden onChange={handleUpload} />
-              </label>
-            </div>
-            {upload && <p className={`upload-status ${upload.status}`}>{upload.message}</p>}
-            {videos.length === 0 ? (
-              <p className="muted small">업로드된 영상이 없습니다.</p>
-            ) : (
-              <ul>
-                {videos.map((v) => (
-                  <li key={v.name}>
-                    <button className={source?.name === v.name ? 'active' : ''} onClick={() => selectSource(v)}>
-                      <Icon name="film" size={16} />
-                      <span className="video-name">{v.name}</span>
-                      <span className="video-meta num">{formatSize(v.size)}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-        </aside>
+        </section>
       </main>
-
-      <footer className="transport">
-        <button className="play-btn" onClick={togglePlay} disabled={transportDisabled}
-          aria-label={playing ? '일시정지' : '재생'}>
-          <Icon name={playing ? 'pause' : 'play'} size={20} />
-        </button>
-        <button className="icon-btn" onClick={() => seekTo(0)} disabled={transportDisabled} aria-label="처음으로">
-          <Icon name="restart" size={18} />
-        </button>
-        <span className="time num">{formatTime(currentTime)}</span>
-        <input type="range" className="scrubber" min="0" max={duration || DEFAULT_TIMELINE} step="0.01"
-          value={Math.min(currentTime, duration || DEFAULT_TIMELINE)}
-          style={{ '--progress': `${progress}%` }}
-          onChange={(e) => seekTo(parseFloat(e.target.value))}
-          disabled={transportDisabled} aria-label="타임라인" />
-        <span className="time num muted">{formatTime(duration)}</span>
-        <span className="source-name">{videoMaster ? source.name : '트래킹 스트림'}</span>
-      </footer>
     </div>
   )
 }

@@ -81,7 +81,7 @@ export function videoRect(containerW, containerH, videoW, videoH) {
 export function inkOn(hex) {
   const n = parseInt(hex.slice(1), 16)
   const lum = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255
-  return lum > 0.6 ? '#0A0B0D' : '#F2F3F5'
+  return lum > 0.6 ? '#070908' : '#E6EAE7'
 }
 
 /* ---------- 보정 확인용 경기장 라인 (pipeline/pitch.py 의 pitch_polylines 와 같은 모델) ---------- */
