@@ -78,6 +78,16 @@ class JerseyCropBank:
             for q, t, c in self.items.pop(child, []):
                 self.add(root, t, c, q)
 
+    def swap(self, swaps: Sequence[Tuple[int, int, int]]):
+        """ID 교체 바로잡기 [(a, b, 시작 프레임), ...] 반영: 시작 프레임 이후 크롭의 주인을 맞바꿈"""
+        for a, b, start in swaps:
+            ia, ib = self.items.pop(a, []), self.items.pop(b, [])
+            na = [x for x in ia if x[1] < start] + [x for x in ib if x[1] >= start]
+            nb = [x for x in ib if x[1] < start] + [x for x in ia if x[1] >= start]
+            for tid, items in ((a, na), (b, nb)):
+                for q, t, c in items:
+                    self.add(tid, t, c, q)
+
     def __len__(self):
         return sum(len(v) for v in self.items.values())
 

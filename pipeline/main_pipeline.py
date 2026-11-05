@@ -130,7 +130,7 @@ class Soccer3DPipeline:
 
         Returns:
             {mode, stride, img_size, ball_imgsz, ball_tile, postprocess, line_refine, auto_calibrate,
-             team_classifier ('siglip' | 'color'), sam_refine (bool), jersey_ocr (bool)}
+             team_classifier ('siglip' | 'color'), sam_refine (bool), jersey_ocr (bool), sam_video (bool)}
         """
         cfg = self.config.get('analysis', {})
         mode = mode or cfg.get('mode', 'realtime')
@@ -157,6 +157,8 @@ class Soccer3DPipeline:
         base['sam_refine'] = gpu if sam == 'auto' else bool(sam)
         ocr = base.get('jersey_ocr', False)               # 등번호 인식은 정밀 모드에서만 (프로필에 옵션)
         base['jersey_ocr'] = gpu if ocr == 'auto' else bool(ocr)
+        vid = base.get('sam_video', False)                # SAM3 영상 추적 바로잡기 (정밀 모드, 후처리 필요)
+        base['sam_video'] = (gpu if vid == 'auto' else bool(vid)) and bool(base.get('postprocess'))
         return base
 
     def make_team_embedder(self):
@@ -167,6 +169,14 @@ class Soccer3DPipeline:
             self._team_embedder = SiglipEmbedder(models.get('siglip', 'google/siglip2-base-patch16-224'),
                                                  device=self.device)
         return self._team_embedder
+
+    def make_video_tracker(self):
+        """SAM3 영상 추적기 (gpu_models.sam 이 SAM3 일 때, 위험 구간만 전파)"""
+        if getattr(self, '_video_tracker', None) is None:
+            from tracking.sam_video import Sam3VideoTracker
+            models = self.config.get('gpu_models', {}) or {}
+            self._video_tracker = Sam3VideoTracker(models.get('sam_video', 'facebook/sam3'), device=self.device)
+        return self._video_tracker
 
     def make_jersey_reader(self):
         """GLM-OCR 등번호 판독기 (gpu_models.ocr, 모델은 첫 사용 때 로드)"""

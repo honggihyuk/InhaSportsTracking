@@ -77,12 +77,14 @@ analysis:
       team_classifier: auto # siglip | color | auto (auto: GPU 면 SigLIP2 임베딩, 아니면 유니폼 평균색)
       sam_refine: auto      # true | false | auto (auto: GPU 면 SAM 마스크로 발 위치 정밀화)
       jersey_ocr: auto      # true | false | auto (auto: GPU 면 GLM-OCR 등번호 인식 + 같은 번호 트랙 재연결)
+      sam_video: auto       # true | false | auto (auto: GPU 면 끊김·겹침 구간만 SAM3 영상 추적으로 트랙 잇기·ID 교체 바로잡기)
 
 # GPU 정밀 모델 (Hugging Face). 처음 쓸 때 자동 다운로드
 gpu_models:
   siglip: google/siglip2-base-patch16-224
   sam: facebook/sam3                 # Hugging Face 접근 승인 + hf auth login 필요
   sam_fallback: facebook/sam2.1-hiera-large  # SAM3 를 받을 수 없으면 자동으로 사용 (승인 불필요)
+  sam_video: facebook/sam3           # SAM3 영상 추적기 (Sam3TrackerVideoModel, sam 과 같은 가중치)
   ocr: zai-org/GLM-OCR               # 등번호 인식 (MIT, 0.9B, bf16 약 2 GB)
 
 # 경기 질의 에이전트 (POST /analysis/{name}/ask)
