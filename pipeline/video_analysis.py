@@ -196,7 +196,7 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
                   progress: Callable[[int, int], None] = lambda done, total: None,
                   max_frames: Optional[int] = None, stride: int = 1, mode: str = 'realtime',
                   line_store=None, postprocess: Optional[bool] = None,
-                  team_embedder=None, refiner=None, jersey_reader=None) -> Dict:
+                  team_embedder=None, refiner=None, jersey_reader=None, video_tracker=None) -> Dict:
     """
     영상 전체를 분석해 결과 dict 반환
 
@@ -212,6 +212,8 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
         postprocess: 트랙 잇기·공백 보간·공 오탐 제거 (None 이면 precise 일 때만)
         team_embedder: 크롭 목록 → 임베딩 (pipeline.team_embed.SiglipEmbedder). 주면 평균색 대신
                        SigLIP2 + UMAP + K-Means 로 팀을 나눈다 (실패하면 평균색으로 대체)
+        video_tracker: tracking.sam_video.Sam3VideoTracker. 주면(후처리와 함께) 트랙이 끊긴 곳·박스가 겹친 곳만
+                       SAM3 영상 추적으로 다시 따라가 끊긴 트랙을 잇고 ID 교체를 바로잡는다 (결과 sam_video)
         jersey_reader: tracking.identity.GlmOcrReader. 주면 트랙마다 등·가슴 크롭을 모아 등번호를 읽고,
                        같은 팀·번호이고 시간상 겹치지 않는 트랙을 같은 선수로 잇는다 (결과 identities, identity)
         refiner: tracking.sam_refiner.SamRefiner. 주면 선수 박스마다 SAM 마스크로 발 위치를 구해
@@ -233,6 +235,7 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
 
     frames: List[Optional[List[list]]] = []
     motion: List[Optional[list]] = []
+    sam_video = None
     track_colors: Dict[int, List[np.ndarray]] = {}
     track_crops: Dict[int, List[np.ndarray]] = {}
     track_labels: Dict[int, Dict[str, int]] = {}
@@ -321,6 +324,23 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
         stitched = pp.stitch_tracks(frames, motion, fps, track_colors)
         if jersey_bank is not None:
             jersey_bank.merge(stitched)
+        if video_tracker is not None:
+            from tracking.sam_video import repair_tracks
+            try:
+                links, swaps, sam_video = repair_tracks(video_path, frames, (width, height), video_tracker, fps)
+                for child, root in links.items():          # 이은 트랙의 크롭·라벨·색도 대표 ID 로
+                    track_crops.setdefault(root, []).extend(track_crops.pop(child, []))
+                    track_colors.setdefault(root, []).extend(track_colors.pop(child, []))
+                    merged = track_labels.setdefault(root, {})
+                    for label, n in track_labels.pop(child, {}).items():
+                        merged[label] = merged.get(label, 0) + n
+                if jersey_bank is not None:
+                    jersey_bank.merge(links)
+                    jersey_bank.swap(swaps)
+                sam_video['swaps'] = [list(s) for s in swaps]
+            except Exception as e:  # 모델 로드 실패 등 → 기존 추적 결과 유지
+                print(f"SAM3 영상 추적 실패, 건너뜀: {e}")
+                sam_video = {'error': str(e)}
         for child, root in stitched.items():  # 이어 붙인 트랙의 크롭·라벨도 대표 ID 로 합침
             track_crops.setdefault(root, []).extend(track_crops.pop(child, []))
             merged = track_labels.setdefault(root, {})
@@ -383,6 +403,7 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
         # 트랙별 등번호 {jersey_number(미확정 None), confidence, evidence(일치한 판독 수), readings(읽은 크롭 수)}
         'identities': None if identities is None else {str(k): v for k, v in identities.items()},
         'identity': identity_info,
+        'sam_video': sam_video,                       # SAM3 영상 추적 바로잡기 요약 (끊김 이음·ID 교체 수)
         'team_method': team_info,
         'sam': None if refiner is None else {'model': getattr(refiner, 'model_id', None), 'feet': sam_feet},
         'calibration': None,
