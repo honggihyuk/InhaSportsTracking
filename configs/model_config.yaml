@@ -152,3 +152,17 @@ logging:
   level: "INFO"
   save_to_file: true
   log_dir: "logs"
+
+# 선수 속력 이상값 처리 (pipeline/postprocess.py smooth_world → find_jumps, 11부)
+#   가려짐으로 박스가 뒤 선수에게 미끄러지거나 ID 가 바뀌면 경기장 좌표가 0.1~0.2 초 만에 수 m 옮겨 가고,
+#   등속 칼만+RTS 평활화가 이를 1 초 가까이 퍼뜨려 12~14 m/s '질주'로 만든다.
+#   0.2 초 창 중앙값 위치끼리 비교해 max_speed 로 갈 수 없는 이동(margin 이상)을 점프로 보고,
+#   그 구간은 측정 잡음을 outlier_noise 배로 키워 결측처럼(RTS 가 앞뒤로 메움), 다른 사람으로 넘어간 점프는 궤적을 끊는다.
+speed_filter:
+  enabled: true
+  max_speed: 11.0      # m/s
+  window_s: 0.2        # s
+  margin: 1.5          # m
+  outlier_noise: 30.0
+  max_excursion_s: 1.0 # s, 이 안에 점프 전 궤적(등속 예측)으로 돌아오면 끊지 않고 그 사이를 이상값으로
+  max_accel: 8.0       # m/s², 돌아왔는지 판정할 때 등속 예측에 주는 가속 여유

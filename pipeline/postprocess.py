@@ -290,17 +290,153 @@ def conf_noise(conf: Optional[float], full: float = 0.7, worst: float = 30.0) ->
     return float(worst ** (1.0 - c))
 
 
+SPEED_FILTER_DEFAULTS = {
+    'enabled': True,
+    'max_speed': 11.0,      # m/s, 사람이 낼 수 있는 속력 상한 (축구 선수 최고 약 10~10.5 m/s)
+    'window_s': 0.2,        # 점프 앞뒤 위치를 대표할 중앙값 창 길이
+    'margin': 1.5,          # m, 창 중앙값에 남는 측정 잡음 여유 (정상 이동은 99 % 가 0.5 m 이하)
+    'outlier_noise': 30.0,  # 이상 구간 측정 잡음 배율 → 사실상 결측으로 보고 RTS 가 앞뒤로 메움
+    'max_excursion_s': 1.0, # 이 시간 안에 점프 전 궤적으로 돌아오면 끊지 않고 그 사이를 이상값으로
+    'max_accel': 8.0,       # m/s², '돌아왔는지' 판정 때 점프 전 등속 예측에 주는 가속 여유
+}
+
+
+def load_speed_filter(path: Optional[str] = None) -> Dict:
+    """configs/model_config.yaml 의 speed_filter 블록 (없으면 기본값)"""
+    import os
+    cfg = dict(SPEED_FILTER_DEFAULTS)
+    path = path or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                'configs', 'model_config.yaml')
+    try:
+        import yaml
+        with open(path, encoding='utf-8') as f:
+            cfg.update((yaml.safe_load(f) or {}).get('speed_filter') or {})
+    except (OSError, ImportError, AttributeError):
+        pass
+    return cfg
+
+
+def find_jumps(ts: np.ndarray, z: np.ndarray, fps: float, max_speed: float = 11.0, window_s: float = 0.2,
+               margin: float = 1.5, max_excursion_s: float = 1.0, max_accel: float = 8.0,
+               **_) -> Tuple[np.ndarray, List[int]]:
+    """
+    경기장 좌표에서 물리적으로 불가능한 위치 점프 찾기 (박스가 가려진 선수 뒤로 미끄러짐, ID 교체, 잘못 이은 트랙)
+
+    인덱스 i 마다 앞 창 [i-k, i) 와 뒤 창 [i, i+k) 의 중앙값 위치를 비교해, 두 창 사이 시간에 max_speed 로
+    갈 수 있는 거리보다 margin 이상 멀면 점프 구간으로 본다. 프레임마다의 발 위치 흔들림(멀리 있는 선수는
+    프레임당 2~3 m)은 중앙값이 걸러 주므로, 한두 프레임의 잡음이 아니라 위치가 '옮겨 간' 경우만 잡힌다.
+
+    max_excursion_s 안에 위치가 점프 전 궤적으로 돌아오면(잠깐 다른 사람·몸통으로 튄 경우) 그 사이 전체를
+    이상값으로, 돌아오지 않으면(다른 사람으로 넘어감) 점프 구간을 이상값으로 두고 가장 크게 옮겨 간 곳에서 끊는다.
+
+    Returns:
+        (이상값 마스크 (N,), 끊을 인덱스 목록 — 그 인덱스부터 새 구간)
+    """
+    n = len(ts)
+    bad = np.zeros(n, bool)
+    cuts: List[int] = []
+    k = max(3, int(round(window_s * fps)))
+    if n < 6:
+        return bad, cuts
+
+    def gap(a0, a1, b0, b1):
+        """앞 창 [a0,a1) 과 뒤 창 [b0,b1) 중앙값 거리 − max_speed 로 갈 수 있는 거리"""
+        d = np.linalg.norm(np.median(z[b0:b1], axis=0) - np.median(z[a0:a1], axis=0))
+        return d - max_speed * (np.median(ts[b0:b1]) - np.median(ts[a0:a1])) / fps
+
+    excess = np.full(n, -np.inf)
+    for i in range(3, n - 2):
+        excess[i] = gap(max(0, i - k), i, i, min(n, i + k))
+    def runs(mask):
+        """연속으로 True 인 인덱스 구간 [i, j] 목록"""
+        out, i = [], 0
+        while i < n:
+            if mask[i]:
+                j = i
+                while j + 1 < n and mask[j + 1]:
+                    j += 1
+                out.append((i, j))
+                i = j + 1
+            else:
+                i += 1
+        return out
+
+    bands = runs(excess > margin)                  # 점프로 보는 구간
+    # 돌아오는 점프 후보는 절반 기준으로: 갈 때만 잡히고 돌아올 때 잡음으로 기준을 살짝 못 넘으면
+    # 튄 구간이 끊긴 조각으로 남으므로 (돌아왔는지는 returns() 의 궤적 예측이 따로 확인)
+    weak_ends = [j for _, j in runs(excess > 0.5 * margin)]
+
+    horizon = max_excursion_s * fps
+    kp = max(k, int(round(0.5 * fps)))
+
+    def returns(i, j2):
+        """점프 구간 [i, j2] 뒤 창 위치가 점프 전 궤적(직전 0.5 초 등속 직선)의 예측과 맞는지.
+        단순히 'max_speed 로 갈 수 있는 거리'로 보면 구간이 길수록 여유가 커져 옮겨 간 위치도 통과하므로,
+        예측 위치에서 margin + 가속 여유(½·max_accel·Δt²) 안에 들어와야 돌아온 것으로 본다"""
+        pre = np.arange(max(0, i - kp), i)
+        pre = pre[~bad[pre]]
+        post = slice(j2 + 1, min(n, j2 + 1 + k))
+        if len(pre) < 3 or post.stop - post.start < 3:
+            return False
+        tp = ts[pre].astype(float)
+        A = np.c_[tp - tp[-1], np.ones(len(tp))]
+        coef = np.linalg.lstsq(A, z[pre], rcond=None)[0]         # (속도/프레임, 위치) x·y
+        tc = float(np.median(ts[post]))
+        pred = coef[1] + coef[0] * (tc - tp[-1])
+        dt_s = (tc - tp[-1]) / fps
+        return np.linalg.norm(np.median(z[post], axis=0) - pred) <= margin + 0.5 * max_accel * dt_s ** 2
+
+    b = 0
+    while b < len(bands):
+        i, j = bands[b]
+        # max_excursion_s 안의 (약한) 점프 구간 끝 중 그 뒤 위치가 점프 전 궤적으로 돌아온 가장 먼 것 → 그 사이 전체가 튄 구간
+        back = None
+        for e in weak_ends:
+            if e < j:
+                continue
+            if ts[e] - ts[i] > horizon:
+                break
+            if returns(i, e):
+                back = e
+        if back is not None:
+            bad[i:back + 1] = True
+            while b < len(bands) and bands[b][0] <= back:
+                b += 1
+            continue
+        # 돌아오지 않음 → 다른 사람으로 넘어감: 점프 구간을 이상값으로 두고 가장 크게 옮겨 간 곳에서 끊음
+        bad[i:j + 1] = True
+        if i < 3 or n - (j + 1) < 3:
+            cuts.append(i if i >= 3 else j + 1)   # 끝자락 점프: 비교할 창이 모자라면 경계에서 끊음
+        else:
+            cuts.append(int(np.argmax(excess[i:j + 1])) + i)
+        b += 1
+    cuts = sorted({c for c in cuts if 0 < c < n})
+    return bad, cuts
+
+
 def smooth_world(world: List[Optional[List[list]]], fps: float, ball_id: int = 0,
                  player_accel: float = 5.0, ball_accel: float = 40.0,
                  meas_std: float = 0.4, max_gap_s: float = 1.0,
-                 frame_conf: Optional[List[Optional[float]]] = None) -> List[Optional[List[list]]]:
+                 frame_conf: Optional[List[Optional[float]]] = None,
+                 speed_filter=None, report: Optional[Dict] = None) -> List[Optional[List[list]]]:
     """
     world[t] = [[id, x, y], ...] → [[id, x, y, speed(m/s)], ...] (평활화된 위치와 속력)
 
     트랙마다 max_gap_s 보다 긴 공백에서 구간을 나눠 따로 평활화한다. 보정 안 된 프레임(None)은 그대로 둔다.
     frame_conf: 프레임별 보정 신뢰도(0~1). 신뢰도가 낮은 프레임의 측정은 잡음을 크게 잡아(최대 30 배)
                 필터가 앞뒤 믿을 만한 프레임으로 보간하듯 따라가게 한다 → 보정 오차가 속력으로 번지지 않음
+    speed_filter: 선수 위치 점프 처리 (find_jumps). None 이면 설정 파일의 speed_filter 블록, False 면 끔, dict 면 그 값.
+                  점프 구간은 측정 잡음을 outlier_noise 배로 키워 결측처럼 다루고, 다른 사람으로 넘어간 점프는
+                  궤적을 끊는다 → 등속 평활화가 순간 이동을 '빠른 달리기'로 퍼뜨리지 않음 (11부)
+    report: dict 를 주면 {'jumps', 'cuts', 'outlier_points', 'dropped_points', 'tracks'} 처리 요약을 채운다
     """
+    if speed_filter is None:
+        speed_filter = load_speed_filter()
+    elif speed_filter is True:
+        speed_filter = dict(SPEED_FILTER_DEFAULTS)
+    if not speed_filter or not speed_filter.get('enabled', True):
+        speed_filter = None
+    summary = {'jumps': 0, 'cuts': 0, 'outlier_points': 0, 'dropped_points': 0, 'tracks': []}
     dt = 1.0 / (fps or 30.0)
     series: Dict[int, List[Tuple[int, float, float]]] = {}
     for t, entries in enumerate(world):
@@ -312,19 +448,47 @@ def smooth_world(world: List[Optional[List[list]]], fps: float, ball_id: int = 0
         arr = np.array(s)
         ts = arr[:, 0].astype(int)
         cuts = np.where(np.diff(ts) > max_gap)[0] + 1
-        for seg in np.split(np.arange(len(ts)), cuts):
-            if len(seg) == 1:
-                i = seg[0]
-                out[ts[i]].append([tid, round(arr[i, 1], 2), round(arr[i, 2], 2), 0.0])
-                continue
-            std = meas_std
+        for gseg in np.split(np.arange(len(ts)), cuts):
+            std_all = np.full(len(gseg), meas_std, float)
             if frame_conf is not None:
-                std = np.array([meas_std * conf_noise(frame_conf[t] if t < len(frame_conf) else None)
-                                for t in ts[seg]])
-            pos, vel = rts_smooth(ts[seg], arr[seg, 1:], dt, ball_accel if tid == ball_id else player_accel, std)
-            for i, p, v in zip(seg, pos, vel):
-                out[ts[i]].append([tid, round(float(p[0]), 2), round(float(p[1]), 2),
-                                   round(float(np.hypot(*v)), 2)])
+                std_all = np.array([meas_std * conf_noise(frame_conf[t] if t < len(frame_conf) else None)
+                                    for t in ts[gseg]])
+            pieces = [np.arange(len(gseg))]
+            if speed_filter is not None and tid != ball_id:
+                bad, jcuts = find_jumps(ts[gseg], arr[gseg, 1:], fps, **speed_filter)
+                if bad.any():
+                    std_all[bad] *= float(speed_filter.get('outlier_noise', 30.0))
+                    # 끊은 구간의 앞뒤 끝에 걸린 이상값은 양쪽에서 잡아 줄 측정이 없어 필터가 직전 속도로
+                    # 내달리게 되므로 내보내지 않는다 (화면 가장자리에 잘린 박스를 빼는 것과 같은 처리)
+                    # 점프로 끊긴 조각이 0.4 초(창 2 개)도 안 되면 그 위치 자체를 믿을 수 없다
+                    # (잠깐 다른 사람에게 갔다 온 구간인데 이력이 짧아 '돌아옴'으로 확인 못 한 경우) → 버림
+                    min_piece = 2 * max(3, int(round(float(speed_filter.get('window_s', 0.2)) * fps)))
+                    pieces = []
+                    for piece in np.split(np.arange(len(gseg)), jcuts):
+                        good = np.where(~bad[piece])[0]
+                        if len(good) and (not jcuts or good[-1] - good[0] + 1 >= min_piece):
+                            pieces.append(piece[good[0]:good[-1] + 1])
+                    summary['dropped_points'] += int(
+                        len(gseg) - sum(len(p) for p in pieces))
+                    n_jumps = int(np.sum(np.diff(np.r_[0, bad.astype(int)]) == 1))
+                    summary['jumps'] += n_jumps
+                    summary['cuts'] += len(jcuts)
+                    summary['outlier_points'] += int(bad.sum())
+                    summary['tracks'].append({'id': tid, 'frames': [int(ts[gseg][i]) for i in np.where(bad)[0]],
+                                              'cuts': [int(ts[gseg][c]) for c in jcuts]})
+            for piece in pieces:
+                seg = gseg[piece]
+                if len(seg) == 1:
+                    i = seg[0]
+                    out[ts[i]].append([tid, round(arr[i, 1], 2), round(arr[i, 2], 2), 0.0])
+                    continue
+                pos, vel = rts_smooth(ts[seg], arr[seg, 1:], dt, ball_accel if tid == ball_id else player_accel,
+                                      std_all[piece])
+                for i, p, v in zip(seg, pos, vel):
+                    out[ts[i]].append([tid, round(float(p[0]), 2), round(float(p[1]), 2),
+                                       round(float(np.hypot(*v)), 2)])
+    if report is not None:
+        report.update(summary)
     return out
 
 
