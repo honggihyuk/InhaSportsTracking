@@ -370,7 +370,7 @@ def _precompute(video_path, tracker, events: Sequence[Optional[Job]], max_span: 
 def repair_tracks(video_path, frames: List[List[list]], size: Tuple[int, int], tracker, fps: float = 30.0,
                   window_s: float = 1.0, link_iou: float = 0.5, swap_margin: float = 0.2, swap_frames: int = 5,
                   swap_ratio: float = 0.8,
-                  max_events: int = 150, batch: bool = True, max_span: int = 150,
+                  max_events: int = 150, batch: bool = True, max_span: int = 120,
                   progress: Callable[[int, int], None] = lambda d, t: None
                   ) -> Tuple[Dict[int, int], List[Tuple[int, int, int]], Dict]:
     """
