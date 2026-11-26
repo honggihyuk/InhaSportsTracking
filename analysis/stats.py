@@ -2,7 +2,7 @@
 경기 분석 지표 — 평활화된 경기장 좌표(world)에서 계산
 
 선수별 이동 거리·최고/평균 속력·스프린트, 볼 점유(점유율·점유 구간), 패스·턴오버 이벤트,
-팀 대형(무게중심·폭·길이·수비 라인), 팀 히트맵을 만든다.
+팀 대형(무게중심·폭·길이·수비 라인), 팀 히트맵, 팀별 패스 네트워크를 만든다.
 3부 문서(22.4)의 VLM 도구(player_stats, get_possession, find_events, team_shape)가 그대로 쓰는 데이터다.
 
 입력: 분석 결과 dict — fps, world[t] = [[id, x, y, speed], ...], teams {id: home|away|other}, roles
@@ -203,6 +203,65 @@ def heatmaps(world, teams: Dict[str, str]) -> Dict[str, List[List[float]]]:
     return {k: np.round(g / g.max(), 3).tolist() if g.max() > 0 else g.tolist() for k, g in grids.items()}
 
 
+def pass_network(world, events: List[Dict], players: Dict[str, Dict]) -> Dict[str, Dict]:
+    """
+    팀별 패스 네트워크 — 점유 이벤트 중 같은 팀 선수 사이의 패스(type == 'pass')로 만든다.
+
+    노드: 패스를 주거나 받은 선수. 위치는 패스에 관여한 순간(주는 쪽 = 공을 떠나보낸 프레임,
+      받는 쪽 = 공을 잡은 프레임)의 평균 좌표, 그 순간 좌표가 없으면 경기 전체 평균 위치(mean_position).
+    엣지: 방향 없는 선수 쌍별 패스 횟수 (a < b, 방향별 횟수는 a_to_b / b_to_a)
+    """
+    at: Dict[int, Dict[int, Tuple[float, float]]] = {}
+
+    def pos(t: int, pid: int) -> Optional[Tuple[float, float]]:
+        if not 0 <= t < len(world) or not world[t]:
+            return None
+        if t not in at:
+            at[t] = {int(e[0]): (float(e[1]), float(e[2])) for e in world[t]}
+        return at[t].get(pid)
+
+    out: Dict[str, Dict] = {}
+    for team in ('home', 'away'):
+        touches: Dict[int, List[Tuple[float, float]]] = {}
+        counts: Dict[int, Dict[str, int]] = {}
+        edges: Dict[Tuple[int, int], Dict[str, int]] = {}
+        for e in events:
+            if e.get('type') != 'pass' or e.get('team') != team:
+                continue
+            a, b = int(e['from']), int(e['to'])
+            for pid, t, key in ((a, e['frame'], 'passes'), (b, e['end_frame'], 'received')):
+                c = counts.setdefault(pid, {'passes': 0, 'received': 0})
+                c[key] += 1
+                p = pos(int(t), pid)
+                if p is not None:
+                    touches.setdefault(pid, []).append(p)
+            lo, hi = min(a, b), max(a, b)
+            edge = edges.setdefault((lo, hi), {'count': 0, 'a_to_b': 0, 'b_to_a': 0})
+            edge['count'] += 1
+            edge['a_to_b' if a == lo else 'b_to_a'] += 1
+        nodes = []
+        for pid in sorted(counts):
+            info = players.get(str(pid), {})
+            pts = touches.get(pid)
+            if pts:
+                xy = np.mean(np.array(pts), axis=0)
+                position = [round(float(xy[0]), 1), round(float(xy[1]), 1)]
+            else:
+                position = info.get('mean_position')
+            if position is None:
+                continue
+            nodes.append({'id': pid, 'jersey_number': info.get('jersey_number'), 'role': info.get('role', 'player'),
+                          'position': position, 'passes': counts[pid]['passes'],
+                          'received': counts[pid]['received']})
+        kept = {n['id'] for n in nodes}
+        out[team] = {
+            'nodes': nodes,
+            'edges': [{'a': a, 'b': b, **c} for (a, b), c in sorted(edges.items()) if a in kept and b in kept],
+            'passes': sum(c['count'] for c in edges.values()),
+        }
+    return out
+
+
 def compute(result: Dict) -> Dict:
     """분석 결과(보정 완료) → 지표 dict"""
     world = result.get('world') or []
@@ -243,4 +302,5 @@ def compute(result: Dict) -> Dict:
         'events': events,
         'shape': team_shape(world, teams, roles, sides, fps),
         'heatmaps': heatmaps(world, teams),
+        'pass_network': pass_network(world, poss['events'], players),
     }
