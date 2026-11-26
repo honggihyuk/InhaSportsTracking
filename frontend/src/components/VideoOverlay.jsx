@@ -88,7 +88,8 @@ export function VideoOverlay({ analysis, frameIndex, teamColors, showBoxes, show
           ctx.setLineDash(conf === 0 ? [4, 3] : []) // 신뢰도 0 = 후처리로 보간한 박스 (가려진 구간)
           ctx.strokeRect(X(x1), Y(y1), (x2 - x1) * rect.scale, (y2 - y1) * rect.scale)
           ctx.setLineDash([])
-          chip(`#${id}${ROLE_TAG[role] ?? ''}`, X(x1), Y(y1), color)
+          const num = analysis.identities?.[id]?.jersey_number // 등번호 인식 결과 (확정된 것만)
+          chip(`#${id}${num != null ? ` · ${num}` : ''}${ROLE_TAG[role] ?? ''}`, X(x1), Y(y1), color)
         }
       }
     }

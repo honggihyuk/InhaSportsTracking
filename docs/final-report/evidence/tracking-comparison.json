@@ -1,0 +1,8 @@
+{
+  "frames": 1054,
+  "changed_frames": 0,
+  "changed_world_frames": 0,
+  "identical_homographies": true,
+  "identical_sam_video_outcomes": true,
+  "conclusion": "두 전체 실행의 프레임별 박스와 경기장 좌표가 모두 일치했다. 다른 영상의 정확도와 성능 변동은 추가 검증이 필요하다."
+}

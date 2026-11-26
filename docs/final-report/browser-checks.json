@@ -1,0 +1,31 @@
+{
+  "video": "sports_video_1.mp4",
+  "fps": 30.0,
+  "frames": 1054,
+  "pass_seek": {
+    "home": {
+      "expected_s": 2.033333333333333,
+      "interaction": "click",
+      "actual_s": 2.033333
+    },
+    "away": {
+      "expected_s": 11.433333333333334,
+      "interaction": "click",
+      "actual_s": 11.433333
+    }
+  },
+  "screenshots": [
+    "01-tracking-and-twin.png",
+    "02-heatmap.png",
+    "03-passes-home.png",
+    "04-pass-linked-video.png",
+    "03-passes-away.png",
+    "05-team-shape.png"
+  ],
+  "pass_range": {
+    "team": "home",
+    "early": "홈 패스 0회 · 선수 0명 · 0:00 ~ 00:00.0",
+    "late": "홈 패스 4회 · 선수 5명 · 0:00 ~ 00:35.0"
+  },
+  "shape_seek": true
+}

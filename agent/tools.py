@@ -29,9 +29,10 @@ TIME_RANGE = {
 
 SCHEMAS = [
     _schema('match_overview', '경기 영상 전체 요약: 길이, 팀 구성·색, 점유율, 팀별 이동 거리·스프린트·패스 수, 보정 상태', {}),
-    _schema('player_stats', '선수(트랙 ID)별 이동 거리(m), 평균·최고 속력(m/s), 스프린트 횟수. '
-            'player_id 를 주면 그 선수만, 아니면 sort_by 기준 상위 top 명 (모든 팀)', {
+    _schema('player_stats', '선수(트랙 ID)별 등번호, 이동 거리(m), 평균·최고 속력(m/s), 스프린트 횟수. '
+            'player_id 나 jersey_number 를 주면 그 선수만, 아니면 sort_by 기준 상위 top 명 (모든 팀)', {
                 'player_id': {'type': 'integer', 'description': '트랙 ID (화면의 #번호)'},
+                'jersey_number': {'type': 'integer', 'description': '유니폼 등번호 (인식된 선수만, 팀과 함께 주면 정확)'},
                 'team': {'type': 'string', 'enum': TEAM_ENUM, 'description': '특정 팀만 볼 때만 지정'},
                 'sort_by': {'type': 'string', 'enum': ['distance', 'max_speed', 'avg_speed', 'sprints'],
                             'description': "정렬 기준. '많이 뛴'=distance, '빠른'=max_speed (기본 distance)"},
@@ -120,9 +121,19 @@ class MatchTools:
         return out
 
     def player_stats(self, player_id: Optional[int] = None, team: Optional[str] = None,
-                     sort_by: str = 'distance', top: int = 5) -> Dict:
+                     sort_by: str = 'distance', top: int = 5, jersey_number: Optional[int] = None) -> Dict:
         self._need_stats()
         players = self.stats.get('players') or {}
+        if jersey_number is not None and player_id is None:
+            hits = [k for k, p in players.items() if p.get('jersey_number') == int(jersey_number)
+                    and (team is None or p.get('team') == team)]
+            if not hits:
+                return {'error': f'등번호 {jersey_number} 로 인식된 선수가 없습니다 (번호 미확정이면 crop_player 로 확인).'}
+            if len(hits) > 1:
+                return {'jersey_number': int(jersey_number), 'candidates': [
+                    {'player_id': int(k), 'team': players[k].get('team')} for k in hits],
+                    'note': '여러 팀에 같은 번호가 있습니다. team 을 지정하세요.', 'frames': []}
+            player_id = int(hits[0])
         if player_id is not None:
             p = players.get(str(int(player_id)))
             if p is None:
@@ -136,7 +147,8 @@ class MatchTools:
         rows = [(int(k), p) for k, p in players.items() if team is None or p.get('team') == team]
         rows.sort(key=lambda kv: key(kv[1]), reverse=True)
         return {'sort_by': sort_by, 'players': [
-            {'player_id': k, 'team': p.get('team'), 'role': p.get('role'), 'seconds': p.get('seconds'),
+            {'player_id': k, 'jersey_number': p.get('jersey_number'), 'team': p.get('team'), 'role': p.get('role'),
+             'seconds': p.get('seconds'),
              'distance': p.get('distance'), 'avg_speed': p.get('avg_speed'), 'max_speed': p.get('max_speed'),
              'sprints': len(p.get('sprints', []))} for k, p in rows[:max(1, int(top))]], 'frames': []}
 

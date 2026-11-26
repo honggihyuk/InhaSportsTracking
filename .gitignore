@@ -52,3 +52,6 @@ data/processed/
 data/roboflow_datasets/
 data/test_detection_result.jpg
 runs/
+
+# RF-DETR 파인튜닝 가중치 (scripts/train_rfdetr.py 출력, 커밋하지 않음)
+models/rfdetr_football/

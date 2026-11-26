@@ -9,6 +9,7 @@ import {
 import { VideoOverlay } from './components/VideoOverlay'
 import { CalibrationPanel } from './components/CalibrationPanel'
 import { AskPanel } from './components/AskPanel'
+import { AnalysisViews } from './components/AnalysisViews'
 import { twinFrame, LANDMARKS, BALL_ID } from './analysis'
 import './index.css'
 
@@ -1091,6 +1092,7 @@ function App() {
                       .map(([id, p]) => (
                         <tr key={id}>
                           <td><span className="team-dot" style={{ background: teamColors[p.team] }} />#{id}
+                            {p.jersey_number != null && <small> · {p.jersey_number}번</small>}
                             {p.role === 'goalkeeper' && <small> GK</small>}</td>
                           <td>{p.distance.toFixed(0)}</td><td>{p.max_speed.toFixed(1)}</td><td>{p.sprints.length}</td>
                         </tr>
@@ -1099,6 +1101,11 @@ function App() {
                 </table>
               )}
             </section>
+          )}
+
+          {stats && !calibrating && (
+            <AnalysisViews analysis={analysis.data} stats={stats} currentFrame={currentFrame} fps={fps}
+              duration={duration} teamColors={teamColors} onSeek={seekTo} />
           )}
 
           {analysisMode && !calibrating && (

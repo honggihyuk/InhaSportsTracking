@@ -1,0 +1,20 @@
+{
+  "frames": 1054,
+  "fps": 30,
+  "teams": {
+    "home": {
+      "passes": 4,
+      "nodes": 5,
+      "edges": 3,
+      "heatSamples": 6171,
+      "shapeSamples": 68
+    },
+    "away": {
+      "passes": 3,
+      "nodes": 4,
+      "edges": 3,
+      "heatSamples": 3825,
+      "shapeSamples": 49
+    }
+  }
+}

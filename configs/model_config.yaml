@@ -18,7 +18,8 @@ detection:
   backend: auto
   rfdetr:
     size: medium               # nano | small | medium | base | large (Apache 2.0)
-    checkpoint: null           # 파인튜닝 가중치 (scripts/train_rfdetr.py). null 이면 COCO 사전학습
+    checkpoint: models/rfdetr_football/checkpoint_best_total.pth  # 파인튜닝 가중치 (scripts/train_rfdetr.py, 저장소에 없음 → 없으면 COCO 사전학습으로 대체)
+    resolution: 960            # 파인튜닝 해상도 (checkpoint 가 없으면 무시해도 됨)
     confidence_threshold: 0.4  # 선수
     ball_threshold: 0.25       # 공 (작아서 점수가 낮게 나옴)
 
@@ -75,12 +76,16 @@ analysis:
       auto_calibrate: true  # 분석 직후 경기장 라인·센터서클로 자동 보정 (실패하면 수동 보정 안내)
       team_classifier: auto # siglip | color | auto (auto: GPU 면 SigLIP2 임베딩, 아니면 유니폼 평균색)
       sam_refine: auto      # true | false | auto (auto: GPU 면 SAM 마스크로 발 위치 정밀화)
+      jersey_ocr: auto      # true | false | auto (auto: GPU 면 GLM-OCR 등번호 인식 + 같은 번호 트랙 재연결)
+      sam_video: auto       # true | false | auto (auto: GPU 면 끊김·겹침 구간만 SAM3 영상 추적으로 트랙 잇기·ID 교체 바로잡기)
 
 # GPU 정밀 모델 (Hugging Face). 처음 쓸 때 자동 다운로드
 gpu_models:
   siglip: google/siglip2-base-patch16-224
   sam: facebook/sam3                 # Hugging Face 접근 승인 + hf auth login 필요
   sam_fallback: facebook/sam2.1-hiera-large  # SAM3 를 받을 수 없으면 자동으로 사용 (승인 불필요)
+  sam_video: facebook/sam3           # SAM3 영상 추적기 (Sam3TrackerVideoModel, sam 과 같은 가중치)
+  ocr: zai-org/GLM-OCR               # 등번호 인식 (MIT, 0.9B, bf16 약 2 GB)
 
 # 경기 질의 에이전트 (POST /analysis/{name}/ask)
 agent:
@@ -147,3 +152,29 @@ logging:
   level: "INFO"
   save_to_file: true
   log_dir: "logs"
+
+# 선수 속력 이상값 처리 (pipeline/postprocess.py smooth_world → find_jumps, 11부)
+#   가려짐으로 박스가 뒤 선수에게 미끄러지거나 ID 가 바뀌면 경기장 좌표가 0.1~0.2 초 만에 수 m 옮겨 가고,
+#   등속 칼만+RTS 평활화가 이를 1 초 가까이 퍼뜨려 12~14 m/s '질주'로 만든다.
+#   0.2 초 창 중앙값 위치끼리 비교해 max_speed 로 갈 수 없는 이동(margin 이상)을 점프로 보고,
+#   그 구간은 측정 잡음을 outlier_noise 배로 키워 결측처럼(RTS 가 앞뒤로 메움), 다른 사람으로 넘어간 점프는 궤적을 끊는다.
+speed_filter:
+  enabled: true
+  max_speed: 11.0      # m/s
+  window_s: 0.2        # s
+  margin: 1.5          # m
+  outlier_noise: 30.0
+  max_excursion_s: 1.0 # s, 이 안에 점프 전 궤적(등속 예측)으로 돌아오면 끊지 않고 그 사이를 이상값으로
+  max_accel: 8.0       # m/s², 돌아왔는지 판정할 때 등속 예측에 주는 가속 여유
+
+# 처리 시간 조정 (docs/PROJECT_OVERVIEW_12_PERFORMANCE.md). 없는 키는 pipeline/video_analysis.PERF_DEFAULTS 값
+perf:
+  sam_video:
+    batch: true          # 시간이 겹치는 위험 구간을 한 세션으로 묶어 SAM3 영상 특징을 재사용 (결과는 하나씩 처리와 같음)
+    max_span: 120        # 묶음 한 덩어리의 최대 프레임 수 (덩어리 프레임 특징을 GPU 에 보관: 프레임당 약 9 MB)
+  autocalib:
+    every_s: 0.5         # 자동 키프레임 탐색 간격 (초). 1.0 이면 탐색 시간 절반 (sports_video_1 에서 정상 비율 -1%p, 최고 속력 +0.15 m/s)
+    top_k: 120           # 프레임마다 F1 로 채점할 가설 수 (60 이면 키프레임이 줄고 정확도 하락 → 유지)
+    refine_k: 4          # 라인 정렬(ICP)할 상위 가설 수 (8 → 4: sports_video_1 키프레임·호모그래피 동일, 탐색 11% 단축)
+  calib_track:
+    anchor_every_s: 0.1  # 앵커 추적 격자 간격 (초). 0.2 는 일부 프레임 보정이 최대 2.6 m 달라져 유지

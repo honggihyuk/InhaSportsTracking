@@ -1,0 +1,179 @@
+{
+ "meta": {
+  "mode": "run",
+  "analysis_mode": "precise",
+  "created": "2026-11-26 17:43",
+  "perf_base": {
+   "sam_video": {
+    "batch": true,
+    "max_span": 120
+   },
+   "autocalib": {
+    "every_s": 0.5,
+    "top_k": 120,
+    "refine_k": 4
+   },
+   "calib_track": {
+    "anchor_every_s": 0.1
+   }
+  },
+  "variants": {
+   "one": {
+    "sam_video": {
+     "batch": false
+    }
+   },
+   "batch": {
+    "sam_video": {
+     "batch": true
+    }
+   }
+  }
+ },
+ "rows": [
+  {
+   "video": "sports_video_1.mp4",
+   "variant": "one",
+   "frames": 1054,
+   "fps": 30.0,
+   "calib_ok_pct": 95.5,
+   "line_err_px": 2.0,
+   "calib_judged_frames": 176,
+   "auto_keyframes": 27,
+   "ball_frames": 1054,
+   "ball_frames_pct": 100.0,
+   "tracks": 49,
+   "tracks_all": 56,
+   "breaks": 1,
+   "overlap_scenes": 30,
+   "jersey_confirmed": 18,
+   "max_speed": 9.35,
+   "players_over_10": 0,
+   "sam_video": {
+    "break_events": 4,
+    "overlap_events": 22,
+    "linked": 2,
+    "swapped": 3,
+    "tracks_before": 61,
+    "tracks_after": 59,
+    "batched": false,
+    "batches": 0,
+    "recomputed": 0,
+    "seconds": 222.2,
+    "swaps": [
+     [
+      56,
+      59,
+      738
+     ],
+     [
+      59,
+      60,
+      324
+     ],
+     [
+      94,
+      95,
+      804
+     ]
+    ]
+   },
+   "t_detect_track": 404.4,
+   "t_postprocess": 0.1,
+   "t_sam_video": 222.3,
+   "t_teams": 15.4,
+   "t_identity": 36.5,
+   "t_keyframes": 43.9,
+   "t_anchor": 19.0,
+   "t_analyze": 678.9,
+   "t_total": 741.8,
+   "peak_vram_gib": 5.02,
+   "profile": {
+    "stride": 1,
+    "img_size": 960,
+    "ball_imgsz": 1280,
+    "ball_tile": 640,
+    "postprocess": true,
+    "line_refine": true,
+    "auto_calibrate": true,
+    "team_classifier": "siglip",
+    "sam_refine": true,
+    "jersey_ocr": true,
+    "sam_video": true,
+    "mode": "precise"
+   }
+  },
+  {
+   "video": "sports_video_1.mp4",
+   "variant": "batch",
+   "frames": 1054,
+   "fps": 30.0,
+   "calib_ok_pct": 95.5,
+   "line_err_px": 2.0,
+   "calib_judged_frames": 176,
+   "auto_keyframes": 27,
+   "ball_frames": 1054,
+   "ball_frames_pct": 100.0,
+   "tracks": 49,
+   "tracks_all": 56,
+   "breaks": 1,
+   "overlap_scenes": 30,
+   "jersey_confirmed": 18,
+   "max_speed": 9.35,
+   "players_over_10": 0,
+   "sam_video": {
+    "break_events": 4,
+    "overlap_events": 22,
+    "linked": 2,
+    "swapped": 3,
+    "tracks_before": 61,
+    "tracks_after": 59,
+    "batched": true,
+    "batches": 11,
+    "recomputed": 2,
+    "seconds": 197.7,
+    "swaps": [
+     [
+      56,
+      59,
+      738
+     ],
+     [
+      59,
+      60,
+      324
+     ],
+     [
+      94,
+      95,
+      804
+     ]
+    ]
+   },
+   "t_detect_track": 408.0,
+   "t_postprocess": 0.2,
+   "t_sam_video": 197.7,
+   "t_teams": 4.1,
+   "t_identity": 35.6,
+   "t_keyframes": 44.0,
+   "t_anchor": 19.3,
+   "t_analyze": 645.8,
+   "t_total": 709.1,
+   "peak_vram_gib": 6.72,
+   "profile": {
+    "stride": 1,
+    "img_size": 960,
+    "ball_imgsz": 1280,
+    "ball_tile": 640,
+    "postprocess": true,
+    "line_refine": true,
+    "auto_calibrate": true,
+    "team_classifier": "siglip",
+    "sam_refine": true,
+    "jersey_ocr": true,
+    "sam_video": true,
+    "mode": "precise"
+   }
+  }
+ ]
+}

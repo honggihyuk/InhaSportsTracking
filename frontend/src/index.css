@@ -756,3 +756,54 @@ h1, h2 { margin: 0; }
   .toolbar .segmented button { flex: 1; justify-content: center; padding: 5px 8px; }
   .toolbar-spacer { display: none; }
 }
+
+/* ---------- 경기 분석 화면 (AnalysisViews: 히트맵 · 패스 네트워크 · 팀 대형) ---------- */
+.analysis-views { grid-column: 1 / -1; }
+.av-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.av-filters .segmented button { padding: 4px 12px; font-size: 11px; }
+.av-team i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+.av-body { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 14px; align-items: start; }
+.av-stage { position: relative; }
+.av-pitch { display: block; width: 100%; height: auto; border-radius: var(--radius-sm); border: 1px solid var(--line); }
+.av-pitch-lines { fill: none; stroke: rgba(232, 242, 236, 0.4); stroke-width: 1; }
+.av-pitch-note { font-family: var(--f-mono); font-size: 1.7px; fill: var(--text-2); text-anchor: middle; }
+.av-cell { transition: fill-opacity 0.15s; }
+.av-cell:hover { stroke: var(--text); stroke-width: 1px; vector-effect: non-scaling-stroke; }
+.av-edge, .av-node { cursor: pointer; outline: none; }
+.av-edge-hit { stroke: transparent; stroke-width: 14px; }
+.av-edge:hover line:last-child, .av-edge:focus-visible line:last-child { stroke-opacity: 1; }
+.av-node:focus-visible circle:nth-child(2), .av-node:hover circle:nth-child(2) { stroke: var(--text); }
+.av-node-label { font-family: var(--f-mono); font-size: 2px; font-weight: 700; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+.av-now-dot { stroke: var(--text); stroke-width: 1px; opacity: 0.9; }
+.av-now-ball { fill: var(--ball); stroke: #070908; stroke-width: 1px; }
+.av-empty-overlay {
+  position: absolute; inset: 0; display: grid; place-items: center; padding: 16px; text-align: center;
+  font-size: 13px; color: var(--text-2); background: rgba(7, 9, 8, 0.45); border-radius: var(--radius-sm); pointer-events: none;
+}
+.av-tip {
+  position: absolute; z-index: 2; transform: translate(-50%, calc(-100% - 12px)); pointer-events: none;
+  display: flex; flex-direction: column; gap: 2px; min-width: 120px; padding: 7px 10px;
+  border-radius: var(--radius-sm); background: var(--surface-1); border: 1px solid var(--line-strong);
+  font-size: 11.5px; color: var(--text-2); white-space: nowrap; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+.av-tip b { font-size: 14px; color: var(--text); font-weight: 600; }
+.av-side { display: flex; flex-direction: column; gap: 10px; font-size: 12.5px; }
+.av-side p { margin: 0; line-height: 1.6; }
+.av-caption { color: var(--text); font-weight: 600; }
+.av-ramp { height: 8px; border-radius: 4px; background: linear-gradient(90deg, color-mix(in srgb, var(--c) 10%, #13261A), var(--c)); }
+.av-ramp-labels { display: flex; justify-content: space-between; margin: 4px 0 6px; font-family: var(--f-mono); font-size: 10px; color: var(--text-3); }
+.av-now-note { display: flex; align-items: center; gap: 6px; }
+.av-now-key { display: inline-block; width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--text); background: var(--text-3); }
+.av-table caption { caption-side: top; text-align: left; padding-bottom: 4px; font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.08em; color: var(--text-3); }
+.av-chart { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.av-chart svg { display: block; cursor: crosshair; }
+.av-grid { stroke: var(--line); stroke-width: 1; }
+.av-tick { font-family: var(--f-mono); font-size: 10px; fill: var(--text-3); font-variant-numeric: tabular-nums; }
+.av-end-label { font-family: var(--f-mono); font-size: 10.5px; fill: var(--text-2); }
+.av-now-line { stroke: var(--accent); stroke-width: 1; }
+.av-hover-line { stroke: var(--text-3); stroke-width: 1; }
+.av-readout { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; margin-top: 6px; font-size: 12px; color: var(--text-2); }
+.av-readout i { display: inline-block; width: 12px; height: 2px; margin-right: 6px; vertical-align: middle; border-radius: 1px; }
+.av-readout b { color: var(--text); font-weight: 600; }
+.av-empty { margin: 14px 0 0; font-size: 12.5px; color: var(--text-2); }
+@media (max-width: 900px) { .av-body { grid-template-columns: minmax(0, 1fr); } }
