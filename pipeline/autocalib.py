@@ -196,14 +196,16 @@ class AutoCalibrator:
         self.min_f1, self.min_recall, self.max_margin = min_f1, min_recall, max_margin
         self.hit_px = hit_px
         self.P, _ = sample_pitch_lines(1.0)
+        self._Ph = np.column_stack([self.P, np.ones(len(self.P))])         # 동차 좌표 (채점마다 만들지 않음)
         self.polylines = pitch_polylines()
+        self._dense = [_densify(poly, 1.0) for poly in self.polylines]    # 그리기용 촘촘한 점 (한 번만)
         self.refiner = LineRefiner(scale=scale)
 
     # -- 채점 --------------------------------------------------------------
     def _stage1(self, G: np.ndarray, dist: np.ndarray, valid: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """G: (K, 3, 3) 경기장 → 작업 이미지. 반환: (맞은 점 수, 보이는 점 수)"""
         h, w = dist.shape
-        q = np.einsum('kij,nj->kni', G, np.column_stack([self.P, np.ones(len(self.P))]))
+        q = self._Ph @ G.transpose(0, 2, 1)                    # (K, N, 3) — einsum 보다 수 배 빠른 BLAS 행렬곱
         z = q[..., 2]
         with np.errstate(divide='ignore', invalid='ignore'):
             u = np.round(q[..., 0] / z)
@@ -218,8 +220,7 @@ class AutoCalibrator:
     def _render(self, G: np.ndarray, shape) -> np.ndarray:
         canvas = np.zeros(shape, np.uint8)
         h, w = shape
-        for poly in self.polylines:
-            dense = _densify(poly, 1.0)
+        for dense in self._dense:
             q = dense @ G[:, :2].T + G[:, 2]
             ok = q[:, 2] > 1e-6
             pts = q[:, :2] / np.where(ok, q[:, 2], 1)[:, None]
@@ -530,12 +531,14 @@ def _consistent(H_a: np.ndarray, H_b: np.ndarray, chain_ab: Optional[np.ndarray]
 def auto_keyframes(motion: List[Optional[list]], masks: Callable[[int], Optional[Tuple[np.ndarray, np.ndarray]]],
                    image_size: Tuple[int, int], fps: float = 30.0, every_s: float = 0.5, scale: float = 0.5,
                    calibrator: Optional[AutoCalibrator] = None, window_s: float = 3.0,
-                   tol_m: float = 2.0, tol_per_s: float = 1.0,
+                   tol_m: float = 2.0, tol_per_s: float = 1.0, top_k: Optional[int] = None, refine_k: Optional[int] = None,
                    progress: Callable[[int, int], None] = lambda d, t: None) -> List[Dict]:
     """
     일정 간격(every_s)과 장면 전환 직후 프레임에서 자동 보정 → 확신한 프레임만 키프레임으로
 
     이웃 키프레임 검증 허용 오차: tol_m + tol_per_s × 간격(초) 미터 (광류 누적 오차를 감안)
+    top_k, refine_k: 프레임마다 2 단계(F1)로 채점할 후보 수, 그중 라인 정렬(ICP)할 상위 후보 수
+                     (None 이면 AutoCalibrator.calibrate 기본값 120, 8)
 
     Returns:
         [{frame, homography: [9], source: 'auto', score: {f1, precision, recall, margin}}, ...]
@@ -546,11 +549,12 @@ def auto_keyframes(motion: List[Optional[list]], masks: Callable[[int], Optional
     step = max(1, int(round(every_s * fps)))
     cuts = [t for t in range(1, n) if motion[t] is None]
     frames = sorted(set(range(0, n, step)) | set(cuts) | {t + 3 for t in cuts if t + 3 < n})
+    knobs = {k: v for k, v in (('top_k', top_k), ('refine_k', refine_k)) if v is not None}
     found = []
     for i, t in enumerate(frames):
         data = masks(t)
         if data is not None:
-            r = calibrator.calibrate(*data)
+            r = calibrator.calibrate(*data, **knobs)
             if r.H is not None:
                 found.append({'frame': int(t), 'H': r.H,
                               'score': {'f1': r.f1, 'precision': r.precision, 'recall': r.recall, 'margin': r.margin}})
