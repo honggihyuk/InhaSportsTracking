@@ -9,6 +9,7 @@ import {
 import { VideoOverlay } from './components/VideoOverlay'
 import { CalibrationPanel } from './components/CalibrationPanel'
 import { AskPanel } from './components/AskPanel'
+import { AnalysisViews } from './components/AnalysisViews'
 import { twinFrame, LANDMARKS, BALL_ID } from './analysis'
 import './index.css'
 
@@ -1100,6 +1101,11 @@ function App() {
                 </table>
               )}
             </section>
+          )}
+
+          {stats && !calibrating && (
+            <AnalysisViews analysis={analysis.data} stats={stats} currentFrame={currentFrame} fps={fps}
+              duration={duration} teamColors={teamColors} onSeek={seekTo} />
           )}
 
           {analysisMode && !calibrating && (
