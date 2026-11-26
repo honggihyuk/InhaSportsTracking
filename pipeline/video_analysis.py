@@ -10,6 +10,7 @@
 """
 
 import json
+import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -28,6 +29,33 @@ TEAM_MAX_CROPS = 16         # 트랙별 SigLIP2 팀 분류 크롭 수
 JERSEY_SAMPLE_EVERY = 5     # 등번호 크롭 후보 간격 (탐지 프레임 기준)
 PITCH_MARGIN = 5.0          # m, 경기장 밖 이 거리까지는 유효 좌표로 인정 (라인 밖 스로인 등)
 HALF_LENGTH, HALF_WIDTH = 52.5, 34.0
+
+# 처리 시간 조정 항목 (configs/model_config.yaml 의 perf: 블록이 덮어씀, docs/PROJECT_OVERVIEW_12_PERFORMANCE.md)
+PERF_DEFAULTS = {
+    'sam_video': {'batch': True, 'max_span': 120},                 # 겹치는 위험 구간 묶기, 덩어리 최대 프레임
+    'autocalib': {'every_s': 0.5, 'top_k': 120, 'refine_k': 4},   # 자동 키프레임 탐색 간격(초)·채점 후보·정렬 후보
+    'calib_track': {'anchor_every_s': 0.1},                       # 앵커 추적 격자 간격(초)
+}
+_perf_config: Optional[Dict] = None
+
+
+def perf_settings(section: str) -> Dict:
+    """perf.<section> 설정 = PERF_DEFAULTS[section] 에 configs/model_config.yaml 의 perf.<section> 을 덮어쓴 값"""
+    global _perf_config
+    if _perf_config is None:
+        try:
+            import yaml
+            path = Path(__file__).resolve().parent.parent / 'configs' / 'model_config.yaml'
+            _perf_config = (yaml.safe_load(path.read_text(encoding='utf-8')) or {}).get('perf') or {}
+        except Exception:                      # 설정 파일이 없거나 깨져도 기본값으로 동작
+            _perf_config = {}
+    return {**PERF_DEFAULTS.get(section, {}), **(_perf_config.get(section) or {})}
+
+
+def set_perf(section: str, **values):
+    """실행 중 perf 설정 덮어쓰기 (scripts/eval_suite.py 의 --set, 설정 비교 실험용)"""
+    perf_settings(section)
+    _perf_config[section] = {**(_perf_config.get(section) or {}), **values}
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +264,8 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
     frames: List[Optional[List[list]]] = []
     motion: List[Optional[list]] = []
     sam_video = None
+    timings: Dict[str, float] = {}             # 단계별 처리 시간 (초) — scripts/eval_suite.py 가 읽음
+    t_stage = time.perf_counter()
     track_colors: Dict[int, List[np.ndarray]] = {}
     track_crops: Dict[int, List[np.ndarray]] = {}
     track_labels: Dict[int, Dict[str, int]] = {}
@@ -317,6 +347,8 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
     finally:
         cap.release()
     frames = [f or [] for f in frames]  # 영상이 예상보다 일찍 끝난 경우 남은 빈칸 정리
+    timings['detect_track'] = round(time.perf_counter() - t_stage, 1)
+    t_stage = time.perf_counter()
 
     post = None
     if postprocess:
@@ -326,8 +358,10 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
             jersey_bank.merge(stitched)
         if video_tracker is not None:
             from tracking.sam_video import repair_tracks
+            t_sam = time.perf_counter()
             try:
-                links, swaps, sam_video = repair_tracks(video_path, frames, (width, height), video_tracker, fps)
+                links, swaps, sam_video = repair_tracks(video_path, frames, (width, height), video_tracker, fps,
+                                                        **perf_settings('sam_video'))
                 for child, root in links.items():          # 이은 트랙의 크롭·라벨·색도 대표 ID 로
                     track_crops.setdefault(root, []).extend(track_crops.pop(child, []))
                     track_colors.setdefault(root, []).extend(track_colors.pop(child, []))
@@ -341,6 +375,7 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
             except Exception as e:  # 모델 로드 실패 등 → 기존 추적 결과 유지
                 print(f"SAM3 영상 추적 실패, 건너뜀: {e}")
                 sam_video = {'error': str(e)}
+            timings['sam_video'] = round(time.perf_counter() - t_sam, 1)
         for child, root in stitched.items():  # 이어 붙인 트랙의 크롭·라벨도 대표 ID 로 합침
             track_crops.setdefault(root, []).extend(track_crops.pop(child, []))
             merged = track_labels.setdefault(root, {})
@@ -351,6 +386,8 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
         filled_ball = pp.fill_gaps(frames, motion, int(round(0.7 * fps)), pp.KIND_BALL)
         post = {'stitched': len(stitched), 'ball_outliers': dropped,
                 'filled_boxes': filled, 'filled_ball': filled_ball}
+        timings['postprocess'] = round(time.perf_counter() - t_stage - timings.get('sam_video', 0.0), 1)
+    t_stage = time.perf_counter()
 
     teams, team_colors, team_info = None, None, {'method': 'color'}
     if team_embedder is not None:
@@ -369,6 +406,8 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
         teams = {**{t: 'other' for t in track_colors}, **teams}
     teams = {t: ('other' if t in special else team) for t, team in teams.items()}
 
+    timings['teams'] = round(time.perf_counter() - t_stage, 1)
+    t_stage = time.perf_counter()
     identities, identity_info = None, None
     if jersey_bank is not None:
         from tracking.identity import identify
@@ -384,6 +423,7 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
         except Exception as e:  # 모델 로드 실패 등 → 번호 없이 계속
             print(f"등번호 인식 실패, 건너뜀: {e}")
             identity_info = {'model': getattr(jersey_reader, 'model_id', None), 'error': str(e)}
+        timings['identity'] = round(time.perf_counter() - t_stage, 1)
     return {
         'version': 2,
         'mode': mode,
@@ -408,6 +448,7 @@ def analyze_video(video_path: Path, detector, tracker: SoccerTracker,
         'sam': None if refiner is None else {'model': getattr(refiner, 'model_id', None), 'feet': sam_feet},
         'calibration': None,
         'world': None,
+        'timings': timings,                           # 단계별 처리 시간 (초): detect_track, postprocess, sam_video, ...
     }
 
 
@@ -487,7 +528,8 @@ def clipped_by_border(o: list, width: int, height: int, margin: int = 2) -> bool
 
 
 def calibrate(result: Dict, keyframe_points: List[Dict], line_masks=None, smooth: Optional[bool] = None,
-              progress: Callable[[int, int], None] = lambda d, t: None) -> Dict:
+              progress: Callable[[int, int], None] = lambda d, t: None,
+              anchor_every_s: Optional[float] = None) -> Dict:
     """
     keyframe_points: [{frame: int, points: [{image: [u, v], pitch: [x, y]}, ...]}, ...]
     → result['calibration'], result['world'] 갱신
@@ -501,6 +543,7 @@ def calibrate(result: Dict, keyframe_points: List[Dict], line_masks=None, smooth
                     정렬해 카메라 움직임 누적 오차를 제거한다 (정밀 분석 모드)
         smooth: 경기장 좌표 칼만+RTS 평활화, 골키퍼 판정, 경기 지표 계산 (None 이면 정밀 모드일 때만).
                 끄면 world 는 [track_id, x, y] (속력 없음). 신뢰도 낮은 프레임은 평활화에서 가중치를 낮춘다
+        anchor_every_s: 앵커 추적 격자 간격 (초). None 이면 perf.calib_track.anchor_every_s
     """
     from .calib_track import anchored_homographies, line_conf
 
@@ -513,9 +556,11 @@ def calibrate(result: Dict, keyframe_points: List[Dict], line_masks=None, smooth
     size = (result.get('width') or 1920, result.get('height') or 1080)
     scale = line_masks.shape[1] / size[0] if getattr(line_masks, 'shape', None) else MOTION_SCALE
     fps = result.get('fps') or 30.0
+    if anchor_every_s is None:
+        anchor_every_s = float(perf_settings('calib_track')['anchor_every_s'])
     Hs, conf, info = anchored_homographies(result['motion'], keyframes, size,
                                            fps=fps, masks=line_masks, scale=scale, keyframe_conf=kconf,
-                                           progress=progress)
+                                           anchor_every_s=anchor_every_s, progress=progress)
     world = []
     for objs, H in zip(result['frames'], Hs):
         if H is None:
@@ -555,12 +600,14 @@ def calibrate(result: Dict, keyframe_points: List[Dict], line_masks=None, smooth
     return result
 
 
-def auto_calibrate(result: Dict, line_masks, every_s: float = 0.5, smooth: Optional[bool] = None,
-                   progress: Callable[[int, int], None] = lambda d, t: None) -> Dict:
+def auto_calibrate(result: Dict, line_masks, every_s: Optional[float] = None, smooth: Optional[bool] = None,
+                   progress: Callable[[int, int], None] = lambda d, t: None, top_k: Optional[int] = None,
+                   refine_k: Optional[int] = None, anchor_every_s: Optional[float] = None) -> Dict:
     """
     사람이 기준점을 찍지 않고 경기장 라인으로 키프레임을 자동으로 찾아 보정 (pipeline/autocalib.py)
 
     every_s 간격(기본 0.5 초)으로 단일 프레임 자동 보정을 시도하고, 키프레임 사이는 calibrate() 의 앵커 추적으로 잇는다.
+    every_s·top_k·refine_k(자동 보정 후보 수)·anchor_every_s 가 None 이면 perf 설정(perf_settings) 값을 쓴다.
 
     기존 수동 키프레임은 유지하고, 수동 키프레임 ±1 초 안의 자동 키프레임은 버린다 (사람 입력 우선).
     자동 키프레임을 하나도 못 찾고 수동 키프레임도 없으면 ValueError.
@@ -569,21 +616,26 @@ def auto_calibrate(result: Dict, line_masks, every_s: float = 0.5, smooth: Optio
         {'auto': 자동 키프레임 수, 'manual': 수동 키프레임 수, 'calibrated_frames': 보정된 프레임 수,
          'confident_frames': 신뢰도 0.5 이상 프레임 수, 'seconds': {'keyframes', 'tracking'} 소요 시간}
     """
-    import time
     from . import autocalib
 
+    cfg = perf_settings('autocalib')
+    every_s = float(cfg['every_s'] if every_s is None else every_s)
+    top_k = int(cfg['top_k'] if top_k is None else top_k)
+    refine_k = int(cfg['refine_k'] if refine_k is None else refine_k)
     fps = result.get('fps') or 30.0
     scale = line_masks.shape[1] / result['width'] if getattr(line_masks, 'shape', None) else MOTION_SCALE
     t0 = time.perf_counter()
     auto = autocalib.auto_keyframes(result['motion'], line_masks, (result['width'], result['height']), fps=fps,
-                                    every_s=every_s, scale=scale, progress=progress)
+                                    every_s=every_s, scale=scale, top_k=top_k, refine_k=refine_k,
+                                    progress=progress)
     manual = [kf for kf in (result.get('calibration') or {}).get('keyframes', []) if kf.get('source') != 'auto']
     near_manual = lambda f: any(abs(f - int(m['frame'])) <= fps for m in manual)
     auto = [kf for kf in auto if not near_manual(kf['frame'])]
     if not auto and not manual:
         raise ValueError("경기장 라인으로 자동 보정할 수 있는 프레임을 찾지 못했습니다. 기준점을 직접 지정하세요.")
     t1 = time.perf_counter()
-    calibrate(result, sorted(manual + auto, key=lambda k: int(k['frame'])), line_masks=line_masks, smooth=smooth)
+    calibrate(result, sorted(manual + auto, key=lambda k: int(k['frame'])), line_masks=line_masks, smooth=smooth,
+              anchor_every_s=anchor_every_s)
     conf = result['calibration']['confidence']
     t2 = time.perf_counter()
     return {'auto': len(auto), 'manual': len(manual),

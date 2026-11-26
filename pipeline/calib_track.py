@@ -96,16 +96,26 @@ class LineScorer:
         self.scale = scale
         self.cal = AutoCalibrator(scale=scale)
         self.S = scale_matrix(scale)
+        self._dist: List[Tuple[np.ndarray, np.ndarray]] = []      # 최근 마스크 → 거리 변환 (같은 마스크 반복 채점)
+
+    def dist(self, mask: np.ndarray) -> np.ndarray:
+        """라인 마스크의 거리 변환 (같은 배열이면 다시 계산하지 않음, 최근 4 개 보관)"""
+        import cv2
+        for m, d in self._dist:
+            if m is mask:
+                return d
+        d = cv2.distanceTransform(np.where(mask > 0, 0, 255).astype(np.uint8), cv2.DIST_L2, 3)
+        self._dist = [(mask, d)] + self._dist[:3]
+        return d
 
     def __call__(self, H: np.ndarray, mask: np.ndarray, valid: np.ndarray) -> Tuple[float, float, float, int]:
-        import cv2
         h, w = mask.shape
         H = orient(H, w / self.scale, h / self.scale)
         try:
             G = self.S @ np.linalg.inv(H)
         except np.linalg.LinAlgError:
             return 0.0, 0.0, 0.0, 0
-        dist = cv2.distanceTransform(np.where(mask > 0, 0, 255).astype(np.uint8), cv2.DIST_L2, 3)
+        dist = self.dist(mask)
         _, vis = self.cal._stage1(G[None], dist, valid)
         f1, p, r = self.cal._f1(G, mask, dist, valid)
         return f1, p, r, int(vis[0])
@@ -134,7 +144,7 @@ def recover(H: np.ndarray, mask: np.ndarray, valid: np.ndarray, scorer: 'LineSco
                     C.append([[sx, 0, pc[0] * (1 - sx) + tx], [0, sy, pc[1] * (1 - sy) + ty], [0, 0, 1]])
     C = np.array(C, float)
     G = np.einsum('ij,kjl->kil', scorer.S @ np.linalg.inv(H), np.linalg.inv(C))
-    dist = cv2.distanceTransform(np.where(mask > 0, 0, 255).astype(np.uint8), cv2.DIST_L2, 3)
+    dist = scorer.dist(mask)
     hit, vis = scorer.cal._stage1(G, dist, valid)
     prec = np.divide(hit, vis, out=np.zeros(len(hit)), where=vis > 0)
     score = np.where(vis >= 40, hit * prec, -1)
